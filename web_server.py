@@ -3893,7 +3893,7 @@ def run_service_test(service, test_config):
                      return True, "Spotify connection successful!"
                  else:
                      # Using fallback metadata source
-                     fb_src = _get_metadata_fallback_source()
+                     fb_src = _get_primary_metadata_source()
                      fallback_name = 'Deezer' if fb_src == 'deezer' else 'Discogs' if fb_src == 'discogs' else 'iTunes'
                      if spotify_configured:
                          return True, f"{fallback_name} connection successful! (Spotify configured but not authenticated)"
@@ -4524,7 +4524,7 @@ def get_status():
             if is_rate_limited or cooldown_remaining > 0:
                 # During rate limit or post-ban cooldown, skip the auth probe entirely.
                 # Probing Spotify here would reset the rate limit timer.
-                music_source = _get_metadata_fallback_source()
+                music_source = _get_primary_metadata_source()
                 if music_source == 'spotify':
                     music_source = 'deezer'  # Spotify rate limited — can't use it
                 spotify_response_time = 0
@@ -4533,7 +4533,7 @@ def get_status():
                 spotify_connected = spotify_client.is_spotify_authenticated() if spotify_client else False
                 spotify_response_time = (time.time() - spotify_start) * 1000
                 # Use whatever the user configured as primary metadata source
-                music_source = _get_metadata_fallback_source()
+                music_source = _get_primary_metadata_source()
                 # If user selected spotify but it's not authed, fall back
                 if music_source == 'spotify' and not spotify_connected:
                     music_source = 'deezer'
@@ -5176,6 +5176,19 @@ def handle_settings():
             if not new_settings:
                 return jsonify({"success": False, "error": "No data received."}), 400
 
+            if 'metadata' in new_settings and isinstance(new_settings['metadata'], dict):
+                metadata_settings = dict(new_settings['metadata'])
+                # Handle legacy 'fallback_source' by migrating to 'primary_source' if 'primary_source' is not already set
+                if 'fallback_source' in metadata_settings:
+                    legacy_primary = metadata_settings.get('fallback_source')
+                    if 'primary_source' not in metadata_settings and legacy_primary:
+                        metadata_settings['primary_source'] = legacy_primary
+                    del metadata_settings['fallback_source']
+                    existing_metadata = config_manager.config_data.get('metadata')
+                    if isinstance(existing_metadata, dict) and 'fallback_source' in existing_metadata:
+                        del existing_metadata['fallback_source']
+                new_settings['metadata'] = metadata_settings
+
             if 'active_media_server' in new_settings:
                 config_manager.set_active_media_server(new_settings['active_media_server'])
 
@@ -5265,8 +5278,8 @@ _comparison_lock = threading.Lock()
 def _is_hydrabase_active():
     """Check if Hydrabase should be used as the PRIMARY metadata source (replaces Spotify).
     Only active in dev mode — the legacy 'Hydrabase replaces everything' behavior.
-    When selected as a fallback source, Hydrabase works through the normal fallback
-    path (_get_metadata_fallback_client) just like iTunes/Deezer — not as primary."""
+    When selected as the configured primary source, Hydrabase works through the
+    normal primary-client path (_get_primary_metadata_client_instance)."""
     try:
         if hydrabase_client is None or not hydrabase_client.is_connected():
             return False
@@ -5319,10 +5332,10 @@ def _run_background_comparison(query, hydrabase_counts=None):
             result['spotify'] = spotify_data
 
             # Fallback metadata source results (iTunes or Deezer)
-            fallback_source = _get_metadata_fallback_source()
+            fallback_source = _get_primary_metadata_source()
             fallback_data = {'tracks': 0, 'artists': 0, 'albums': 0}
             try:
-                fallback_client = _get_metadata_fallback_client()
+                fallback_client = _get_primary_metadata_client_instance()
                 f_tracks = fallback_client.search_tracks(query, limit=10)
                 f_artists = fallback_client.search_artists(query, limit=10)
                 f_albums = fallback_client.search_albums(query, limit=10)
@@ -5395,7 +5408,7 @@ def hydrabase_disconnect():
             _hydrabase_ws = None
     config_manager.set('hydrabase.auto_connect', False)
     # Only disable dev mode if not using Hydrabase as a regular fallback source
-    if _get_metadata_fallback_source() != 'hydrabase':
+    if _get_primary_metadata_source() != 'hydrabase':
         dev_mode_enabled = False
     print("🧪 [Hydrabase] Disconnected")
     return jsonify({"success": True})
@@ -6119,7 +6132,7 @@ def test_connection_endpoint():
         current_time = time.time()
         if service == 'spotify':
             _status_cache['spotify']['connected'] = True
-            _status_cache['spotify']['source'] = _get_metadata_fallback_source()
+            _status_cache['spotify']['source'] = _get_primary_metadata_source()
             _status_cache_timestamps['spotify'] = current_time
             print("✅ Updated Spotify status cache after successful test")
         elif service in ['plex', 'jellyfin', 'navidrome']:
@@ -6169,7 +6182,7 @@ def test_dashboard_connection_endpoint():
         current_time = time.time()
         if service == 'spotify':
             _status_cache['spotify']['connected'] = True
-            _status_cache['spotify']['source'] = _get_metadata_fallback_source()
+            _status_cache['spotify']['source'] = _get_primary_metadata_source()
             _status_cache_timestamps['spotify'] = current_time
             print("✅ Updated Spotify status cache after successful dashboard test")
         elif service in ['plex', 'jellyfin', 'navidrome']:
@@ -6929,7 +6942,7 @@ def spotify_disconnect():
             spotify_enrichment_worker.pause()
         spotify_client.disconnect()
         # Immediately update status cache so UI reflects the change
-        fallback_src = _get_metadata_fallback_source()
+        fallback_src = _get_primary_metadata_source()
         _status_cache['spotify'] = {
             'connected': True,  # Fallback source is always available
             'response_time': 0,
@@ -7837,9 +7850,9 @@ def enhanced_search():
                 hydrabase_worker.enqueue(query, 'artists')
 
             # Search using the user's configured primary metadata source
-            fb_source = _get_metadata_fallback_source()
+            fb_source = _get_primary_metadata_source()
             try:
-                primary_results = _enhanced_search_source(query, _get_metadata_fallback_client())
+                primary_results = _enhanced_search_source(query, _get_primary_metadata_client_instance())
                 primary_source = fb_source
             except Exception as e:
                 logger.debug(f"Primary source ({fb_source}) search failed: {e}")
@@ -9573,7 +9586,7 @@ def get_artist_detail(artist_id):
 
         # Get Spotify discography for proper categorization and missing releases
         spotify_artist_data = None
-        if _get_metadata_fallback_source() == 'spotify' and spotify_client and spotify_client.is_spotify_authenticated():
+        if _get_primary_metadata_source() == 'spotify' and spotify_client and spotify_client.is_spotify_authenticated():
             try:
                 spotify_discography = get_spotify_artist_discography(artist_info['name'])
 
@@ -10045,7 +10058,7 @@ def get_artist_image(artist_id):
             return jsonify({"success": True, "image_url": None})
         else:
             # Use fallback source - fetch album art
-            fallback = _get_metadata_fallback_client()
+            fallback = _get_primary_metadata_client_instance()
             image_url = fallback._get_artist_image_from_albums(artist_id)
             return jsonify({"success": True, "image_url": image_url})
     except Exception as e:
@@ -10355,7 +10368,7 @@ def _resolve_db_album_id(album_id, artist_id=None):
                 return None
 
             # Prefer stored external IDs — match the active fallback source
-            fallback = _get_metadata_fallback_source()
+            fallback = _get_primary_metadata_source()
             if fallback == 'discogs' and row.get('discogs_id'):
                 return row['discogs_id']
             if row['spotify_album_id']:
@@ -10552,7 +10565,7 @@ def download_discography(artist_id):
         if spotify_client and spotify_client.is_authenticated():
             client = spotify_client
         else:
-            fallback_src = _get_metadata_fallback_source()
+            fallback_src = _get_primary_metadata_source()
             if fallback_src == 'itunes':
                 from core.itunes_client import iTunesClient
                 client = iTunesClient()
@@ -10735,7 +10748,7 @@ def _check_album_completion(db, album_data: dict, artist_name: str, test_mode: b
         # try to fetch the real count from the source
         if total_tracks == 0 and album_id:
             try:
-                fallback = _get_metadata_fallback_client()
+                fallback = _get_primary_metadata_client_instance()
                 album_detail = fallback.get_album_tracks(str(album_id))
                 if album_detail and album_detail.get('items'):
                     total_tracks = len(album_detail['items'])
@@ -11486,7 +11499,7 @@ def enhance_artist_quality(artist_id):
             # Fallback source when Spotify unavailable or no match found
             if not matched_track_data:
                 try:
-                    fallback_client = _get_metadata_fallback_client()
+                    fallback_client = _get_primary_metadata_client_instance()
                     itunes_best = None
                     itunes_best_conf = 0.0
 
@@ -31129,9 +31142,9 @@ def search_itunes_tracks():
         else:
             if hydrabase_worker and dev_mode_enabled:
                 hydrabase_worker.enqueue(query, 'tracks')
-            fallback_client = _get_metadata_fallback_client()
+            fallback_client = _get_primary_metadata_client_instance()
             tracks = fallback_client.search_tracks(query, limit=limit)
-            source = _get_metadata_fallback_source()
+            source = _get_primary_metadata_source()
 
         tracks_dict = [{
             'id': t.id,
@@ -31229,7 +31242,7 @@ def get_itunes_album_tracks(album_id):
             except Exception as e:
                 logger.warning(f"Hydrabase album_tracks failed for '{album_id}', falling back to iTunes: {e}")
 
-        fallback_client = _get_metadata_fallback_client()
+        fallback_client = _get_primary_metadata_client_instance()
         album_data = fallback_client.get_album(album_id)
 
         if not album_data:
@@ -31249,7 +31262,7 @@ def get_itunes_album_tracks(album_id):
             'album_type': album_data.get('album_type', 'album'),
             'images': album_data.get('images', []),
             'tracks': tracks,
-            'source': _get_metadata_fallback_source()
+            'source': _get_primary_metadata_source()
         }
         return jsonify(album_dict)
 
@@ -31323,7 +31336,7 @@ def get_discover_album(source, album_id):
             # Spotify failed (not authenticated, album removed, rate limited) — try fallback
             album_name = request.args.get('name', '')
             album_artist = request.args.get('artist', '')
-            fallback = _get_metadata_fallback_client()
+            fallback = _get_primary_metadata_client_instance()
             if fallback and (album_name or album_artist):
                 clean_name = album_name.replace(' - Single', '').replace(' - EP', '').replace(' (Single)', '').strip()
                 search_query = f"{album_artist} {clean_name}" if album_artist else clean_name
@@ -31342,7 +31355,7 @@ def get_discover_album(source, album_id):
                                 'album_type': getattr(r, 'album_type', 'album') or 'album',
                                 'images': [{'url': r.image_url}] if getattr(r, 'image_url', None) else [],
                                 'tracks': tracks,
-                                'source': _get_metadata_fallback_source(),
+                                'source': _get_primary_metadata_source(),
                             })
                 except Exception as e:
                     logger.debug(f"Fallback album resolve failed: {e}")
@@ -32290,16 +32303,16 @@ def _run_playlist_discovery_worker(playlists, automation_id=None):
     try:
         _ew_state = _pause_enrichment_workers('mirrored playlist discovery')
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         itunes_client_instance = None
         if not use_spotify:
             try:
-                itunes_client_instance = _get_metadata_fallback_client()
+                itunes_client_instance = _get_primary_metadata_client_instance()
             except Exception:
-                print(f"❌ Neither Spotify nor {_get_metadata_fallback_source()} available for discovery")
+                print(f"❌ Neither Spotify nor {_get_primary_metadata_source()} available for discovery")
                 _update_automation_progress(automation_id, status='error', progress=100,
-                                            phase='Error', log_line=f'Neither Spotify nor {_get_metadata_fallback_source()} available',
+                                            phase='Error', log_line=f'Neither Spotify nor {_get_primary_metadata_source()} available',
                                             log_type='error')
                 return
 
@@ -32704,12 +32717,12 @@ def _run_tidal_discovery_worker(playlist_id):
 
         # Determine which provider to use
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Initialize fallback client if needed
         itunes_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_metadata_fallback_client()
+            itunes_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Tidal discovery for: {playlist.name} (using {discovery_source.upper()})")
 
@@ -32914,7 +32927,7 @@ def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client
 
         artist_name = artists[0]  # Use primary artist
         source_duration = getattr(tidal_track, 'duration_ms', 0) or 0
-        source_name = "Spotify" if use_spotify else _get_metadata_fallback_source().capitalize()
+        source_name = "Spotify" if use_spotify else _get_primary_metadata_source().capitalize()
 
         print(f"🔍 Tidal track: '{artist_name}' - '{track_name}' (searching {source_name})")
 
@@ -33026,7 +33039,7 @@ def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client
                         'images': [{'url': image_url, 'height': 300, 'width': 300}] if image_url else []
                     },
                     'duration_ms': duration_ms,
-                    'source': _get_metadata_fallback_source(),
+                    'source': _get_primary_metadata_source(),
                     'confidence': best_confidence
                 }
         else:
@@ -33227,39 +33240,17 @@ def _get_deezer_client():
                 _deezer_client_instance = DeezerClient()
     return _deezer_client_instance
 
-def _get_metadata_fallback_source():
+def _get_primary_metadata_source():
     """Get the configured primary metadata source.
     Returns 'spotify', 'itunes', 'deezer', 'discogs', or 'hydrabase'."""
-    try:
-        return config_manager.get('metadata.fallback_source', 'deezer') or 'deezer'
-    except Exception:
-        return 'deezer'
+    from core.metadata_service import get_configured_primary_metadata_source
+    return get_configured_primary_metadata_source()
 
-def _get_metadata_fallback_client():
-    """Get the active metadata client based on settings.
-    Returns a SpotifyClient, iTunesClient, DeezerClient, DiscogsClient, or HydrabaseClient instance."""
-    source = _get_metadata_fallback_source()
-    if source == 'spotify':
-        if spotify_client and spotify_client.is_spotify_authenticated():
-            return spotify_client
-        # Spotify selected but not authed — fall back to deezer
-        return _get_deezer_client()
-    if source == 'deezer':
-        return _get_deezer_client()
-    if source == 'discogs':
-        token = config_manager.get('discogs.token', '')
-        if token:
-            from core.discogs_client import DiscogsClient
-            return DiscogsClient(token=token)
-        from core.itunes_client import iTunesClient
-        return iTunesClient()
-    if source == 'hydrabase':
-        if hydrabase_client and hydrabase_client.is_connected():
-            return hydrabase_client
-        from core.itunes_client import iTunesClient
-        return iTunesClient()
-    from core.itunes_client import iTunesClient
-    return iTunesClient()
+def _get_primary_metadata_client_instance():
+    """Get the effective primary metadata client based on current settings."""
+    from core.metadata_service import get_primary_metadata_client
+    client, _provider = get_primary_metadata_client()
+    return client
 
 
 def _infer_metadata_client_source(client):
@@ -33279,7 +33270,7 @@ def _infer_metadata_client_source(client):
 def _get_primary_metadata_client():
     """Get the configured primary metadata client for general metadata browsing."""
     from core.metadata_service import get_primary_metadata_client
-    return get_primary_metadata_client(spotify_client)
+    return get_primary_metadata_client()
 
 
 def _resolve_artist_for_source(client, source_name, artist_id='', artist_name=''):
@@ -33789,12 +33780,12 @@ def _run_deezer_discovery_worker(playlist_id):
 
         # Determine which provider to use
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Initialize fallback client if needed
         itunes_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_metadata_fallback_client()
+            itunes_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Deezer discovery for: {playlist['name']} (using {discovery_source.upper()})")
 
@@ -34608,12 +34599,12 @@ def _run_spotify_public_discovery_worker(url_hash):
 
         # Determine which provider to use
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Initialize fallback client if needed
         itunes_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_metadata_fallback_client()
+            itunes_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Spotify Public discovery for: {playlist['name']} (using {discovery_source.upper()})")
 
@@ -35319,10 +35310,10 @@ def _run_youtube_discovery_worker(url_hash):
 
         # Determine which provider to use (Spotify preferred, iTunes fallback)
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Get fallback client
-        itunes_client = _get_metadata_fallback_client()
+        itunes_client = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source} discovery for {len(tracks)} YouTube tracks...")
 
@@ -35633,10 +35624,10 @@ def _run_listenbrainz_discovery_worker(state_key):
 
         # Determine which provider to use (Spotify preferred, iTunes fallback)
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Get fallback client
-        itunes_client = _get_metadata_fallback_client()
+        itunes_client = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source} discovery for {len(tracks)} ListenBrainz tracks...")
 
@@ -38057,7 +38048,7 @@ def add_to_watchlist():
                 conn.close()
                 if row:
                     # Library artist — use the best available source ID
-                    fallback = _get_metadata_fallback_source()
+                    fallback = _get_primary_metadata_source()
                     if fallback == 'discogs' and row['discogs_id']:
                         artist_id = row['discogs_id']
                         source = 'discogs'
@@ -38079,7 +38070,7 @@ def add_to_watchlist():
             except Exception:
                 pass
         if not source:
-            fallback_source = _get_metadata_fallback_source()
+            fallback_source = _get_primary_metadata_source()
             source = fallback_source if is_numeric_id else 'spotify'
         success = database.add_artist_to_watchlist(artist_id, artist_name, profile_id=get_current_profile_id(), source=source)
 
@@ -38240,7 +38231,7 @@ def add_batch_to_watchlist():
                 continue
 
             is_numeric = artist_id.isdigit()
-            fb_source = _get_metadata_fallback_source()
+            fb_source = _get_primary_metadata_source()
             src = fb_source if is_numeric else 'spotify'
             success = database.add_artist_to_watchlist(artist_id, artist_name, profile_id=get_current_profile_id(), source=src)
             if success:
@@ -38249,9 +38240,9 @@ def add_batch_to_watchlist():
                 try:
                     is_numeric_id = artist_id.isdigit()
                     if is_numeric_id:
-                        fb_source = _get_metadata_fallback_source()
+                        fb_source = _get_primary_metadata_source()
                         if fb_source == 'deezer':
-                            fb_client = _get_metadata_fallback_client()
+                            fb_client = _get_primary_metadata_client_instance()
                             fb_artist = fb_client.get_artist(artist_id)
                             if fb_artist and fb_artist.get('images'):
                                 image_url = fb_artist['images'][0].get('url')
@@ -38338,7 +38329,7 @@ def watchlist_all_unwatched_library_artists():
                 skipped_already += 1
                 continue
 
-            src = active_source if active_source in ('spotify', 'itunes', 'deezer') else _get_metadata_fallback_source()
+            src = active_source if active_source in ('spotify', 'itunes', 'deezer') else _get_primary_metadata_source()
             success = database.add_artist_to_watchlist(artist_id, artist_name, profile_id=get_current_profile_id(), source=src)
             if success:
                 added += 1
@@ -38441,7 +38432,7 @@ def start_watchlist_scan():
     try:
         # Check if MetadataService can provide a working client (Spotify OR fallback)
         from core.metadata_service import MetadataService
-        metadata_service = MetadataService(preferred_provider="primary")
+        metadata_service = MetadataService()
 
         # Get active provider - will be spotify or the configured fallback
         active_provider = metadata_service.get_active_provider()
@@ -40136,7 +40127,7 @@ def _get_active_discovery_source():
     Returns the user's configured primary metadata source.
     If the selected source requires auth and isn't available, falls back.
     """
-    source = _get_metadata_fallback_source()
+    source = _get_primary_metadata_source()
     if source == 'spotify' and not (spotify_client and spotify_client.is_spotify_authenticated()):
         return 'deezer'
     return source
@@ -40153,7 +40144,7 @@ def get_discover_hero():
         print(f"🎵 Discover hero using source: {active_source}")
 
         # Import fallback client for non-Spotify lookups
-        itunes_client = _get_metadata_fallback_client()
+        itunes_client = _get_primary_metadata_client_instance()
 
         # Get top similar artists (excluding watchlist, cycled by last_featured)
         # Fetch more than needed since strict source filtering may drop many
@@ -40447,8 +40438,8 @@ def enrich_similar_artists():
                     _detect_and_set_rate_limit(e, 'enrich_similar_artists')
                     print(f"Error enriching Spotify batch: {e}")
             else:
-                fallback_client = _get_metadata_fallback_client()
-                fallback_source = _get_metadata_fallback_source()
+                fallback_client = _get_primary_metadata_client_instance()
+                fallback_source = _get_primary_metadata_source()
                 for aid in uncached_ids[:50]:
                     try:
                         fb_artist = fallback_client.get_artist(aid)
@@ -40613,7 +40604,7 @@ def get_discover_recent_releases():
                 try:
                     # Try direct ID lookup first
                     if album_id:
-                        fallback = _get_metadata_fallback_client()
+                        fallback = _get_primary_metadata_client_instance()
                         if fallback:
                             album_data = fallback.get_album(str(album_id))
                             if album_data:
@@ -40622,7 +40613,7 @@ def get_discover_recent_releases():
 
                     # Fallback: search by name
                     if not cover and album.get('album_name') and album.get('artist_name'):
-                        fallback = _get_metadata_fallback_client()
+                        fallback = _get_primary_metadata_client_instance()
                         if fallback:
                             results = fallback.search_albums(f"{album['artist_name']} {album['album_name']}", limit=1)
                             if results and hasattr(results[0], 'image_url') and results[0].image_url:
@@ -40950,13 +40941,13 @@ def resolve_cache_album():
                 return jsonify({'success': True, 'entity_id': row['entity_id'], 'source': row['source']})
 
             # Strategy 3: not in cache — try searching the fallback client directly
-            fallback = _get_metadata_fallback_client()
+            fallback = _get_primary_metadata_client_instance()
             if fallback:
                 try:
                     results = fallback.search_albums(f"{artist} {name}", limit=3)
                     if results:
                         r = results[0]
-                        return jsonify({'success': True, 'entity_id': str(r.id), 'source': _get_metadata_fallback_source()})
+                        return jsonify({'success': True, 'entity_id': str(r.id), 'source': _get_primary_metadata_source()})
                 except Exception:
                     pass
 
@@ -41599,7 +41590,7 @@ def get_your_artists():
         if spotify_client and spotify_client.is_spotify_authenticated():
             active_source = 'spotify'
         else:
-            fb = _get_metadata_fallback_source()
+            fb = _get_primary_metadata_source()
             if fb:
                 active_source = fb
         active_col = {'spotify': 'spotify_artist_id', 'itunes': 'itunes_artist_id',
@@ -41655,7 +41646,7 @@ def get_your_artists_all():
         if spotify_client and spotify_client.is_spotify_authenticated():
             active_source = 'spotify'
         else:
-            fb = _get_metadata_fallback_source()
+            fb = _get_primary_metadata_source()
             if fb:
                 active_source = fb
         active_col = {'spotify': 'spotify_artist_id', 'itunes': 'itunes_artist_id',
@@ -46092,12 +46083,12 @@ def _run_beatport_discovery_worker(url_hash):
 
         # Determine which provider to use
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        discovery_source = 'spotify' if use_spotify else _get_metadata_fallback_source()
+        discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
         # Initialize fallback client if needed
         itunes_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_metadata_fallback_client()
+            itunes_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source.upper()} discovery for {len(tracks)} Beatport tracks...")
 
@@ -46982,7 +46973,7 @@ def prepare_mirrored_discovery(playlist_id):
 
         # Determine current active metadata source for provider-mismatch detection
         _use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
-        _current_provider = 'spotify' if _use_spotify else _get_metadata_fallback_source()
+        _current_provider = 'spotify' if _use_spotify else _get_primary_metadata_source()
 
         # Check for cached discovery results in extra_data
         pre_discovered_results = []
@@ -47542,8 +47533,8 @@ def playlist_explorer_album_tracks(album_id):
     try:
         # Determine source
         spotify_available = spotify_client and spotify_client.is_spotify_authenticated()
-        source_name = 'spotify' if spotify_available else _get_metadata_fallback_source()
-        client = spotify_client if spotify_available else _get_metadata_fallback_client()
+        source_name = 'spotify' if spotify_available else _get_primary_metadata_source()
+        client = spotify_client if spotify_available else _get_primary_metadata_client_instance()
 
         if not client:
             return jsonify({"success": False, "error": "No metadata source available"}), 400

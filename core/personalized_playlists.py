@@ -107,7 +107,7 @@ class PersonalizedPlaylistsService:
         """
         try:
             from core.metadata_service import get_primary_metadata_source
-            return get_primary_metadata_source(self.spotify_client)
+            return get_primary_metadata_source()
         except Exception:
             return 'itunes'
 
@@ -881,7 +881,7 @@ class PersonalizedPlaylistsService:
 
             from core.metadata_service import get_primary_metadata_client, log_artist_album_fetch
 
-            active_client, active_source = get_primary_metadata_client(self.spotify_client)
+            active_client, active_source = get_primary_metadata_client()
             use_spotify = active_source == 'spotify'
             logger.info(f"Building custom playlist from {len(seed_artist_ids)} seed artists (source: {active_source})")
 

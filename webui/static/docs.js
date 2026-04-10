@@ -781,7 +781,7 @@ const DOCS_SECTIONS = [
         content: () => `
             <div class="docs-subsection" id="search-enhanced">
                 <h3 class="docs-subsection-title">Enhanced Search</h3>
-                <p class="docs-text">The default search mode. Type an artist, album, or track name and results appear in a categorized dropdown: <strong>In Your Library</strong>, <strong>Artists</strong>, <strong>Albums</strong>, <strong>Singles & EPs</strong>, and <strong>Tracks</strong>. Results come from your primary metadata source (Spotify by default).</p>
+                <p class="docs-text">The default search mode. Type an artist, album, or track name and results appear in a categorized dropdown: <strong>In Your Library</strong>, <strong>Artists</strong>, <strong>Albums</strong>, <strong>Singles & EPs</strong>, and <strong>Tracks</strong>. Results come from your configured primary metadata source.</p>
                 <ul class="docs-list">
                     <li>Click an <strong>artist</strong> to view their full discography with download buttons on each release</li>
                     <li>Click an <strong>album</strong> to open the download modal with track selection</li>

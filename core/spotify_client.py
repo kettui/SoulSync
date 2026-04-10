@@ -505,25 +505,36 @@ class SpotifyClient:
         return self._discogs_client
 
     @property
-    def _fallback_source(self) -> str:
-        """Get configured metadata fallback source ('itunes', 'deezer', or 'discogs')"""
+    def _non_spotify_metadata_source(self) -> str:
+        """Get the configured non-Spotify metadata source for Spotify fallback behavior."""
         try:
-            return config_manager.get('metadata.fallback_source', 'itunes') or 'itunes'
+            from core.metadata_service import get_configured_non_spotify_metadata_source
+            return get_configured_non_spotify_metadata_source()
         except Exception:
-            return 'itunes'
+            return 'deezer'
 
     @property
-    def _fallback(self):
-        """Get the active fallback metadata client based on settings"""
-        if self._fallback_source == 'deezer':
+    def _non_spotify_metadata_client(self):
+        """Get the active non-Spotify metadata client used by Spotify fallback behavior."""
+        if self._non_spotify_metadata_source == 'deezer':
             return self._deezer
-        if self._fallback_source == 'discogs':
+        if self._non_spotify_metadata_source == 'discogs':
             # Only use Discogs if token is configured
             token = config_manager.get('discogs.token', '')
             if token:
                 return self._discogs
             return self._itunes  # Fall back to iTunes if no Discogs token
         return self._itunes
+
+    @property
+    def _fallback_source(self) -> str:
+        """Backward-compatible alias for the configured non-Spotify metadata source."""
+        return self._non_spotify_metadata_source
+
+    @property
+    def _fallback(self):
+        """Backward-compatible alias for the active non-Spotify metadata client."""
+        return self._non_spotify_metadata_client
 
     def reload_config(self):
         """Reload configuration and re-initialize client"""

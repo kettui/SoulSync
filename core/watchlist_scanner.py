@@ -32,8 +32,8 @@ ITUNES_BASE_DELAY = 1.0  # Base delay in seconds for exponential backoff
 def _get_fallback_metadata_client():
     """Get the configured metadata fallback client (iTunes or Deezer)."""
     try:
-        from config.settings import config_manager
-        source = config_manager.get('metadata.fallback_source', 'itunes') or 'itunes'
+        from core.metadata_service import get_configured_non_spotify_metadata_source
+        source = get_configured_non_spotify_metadata_source()
         if source == 'deezer':
             from core.deezer_client import DeezerClient
             return DeezerClient(), 'deezer'
@@ -397,8 +397,8 @@ class WatchlistScanner:
     def metadata_service(self):
         """Get or create MetadataService instance (lazy loading)"""
         if self._metadata_service is None:
-            from core.metadata_service import MetadataService
-            self._metadata_service = MetadataService(preferred_provider="primary")
+            from core.metadata_service import get_metadata_service
+            self._metadata_service = get_metadata_service()
         return self._metadata_service
 
     def _get_active_client_and_artist_id(self, watchlist_artist: WatchlistArtist):

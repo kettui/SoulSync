@@ -1,6 +1,12 @@
 import types
 
-from core.metadata_service import get_primary_metadata_source
+from core.metadata_service import (
+    MetadataService,
+    get_configured_non_spotify_metadata_source,
+    get_configured_primary_metadata_source,
+    get_primary_metadata_client,
+    get_primary_metadata_source,
+)
 from core.personalized_playlists import PersonalizedPlaylistsService
 from core.seasonal_discovery import SeasonalDiscoveryService
 from core.watchlist_scanner import WatchlistScanner
@@ -200,9 +206,70 @@ class SpotifyStub:
 
 def test_get_primary_metadata_source_prefers_configured_provider_when_spotify_authenticated(monkeypatch):
     spotify_client = SpotifyStub()
-    monkeypatch.setattr("core.metadata_service._get_configured_fallback_source", lambda: "deezer")
+    monkeypatch.setattr("core.metadata_service.get_configured_primary_metadata_source", lambda default="deezer": "deezer")
 
     assert get_primary_metadata_source(spotify_client) == "deezer"
+
+
+def test_configured_primary_source_defaults_to_deezer_when_unset(monkeypatch):
+    monkeypatch.setattr("config.settings.config_manager.get", lambda _key, default=None: None)
+
+    assert get_configured_primary_metadata_source() == "deezer"
+
+
+def test_non_spotify_metadata_source_defaults_to_deezer_when_primary_is_spotify(monkeypatch):
+    monkeypatch.setattr("config.settings.config_manager.get", lambda _key, default=None: "spotify")
+
+    assert get_configured_non_spotify_metadata_source() == "deezer"
+
+
+def test_get_primary_metadata_client_reuses_shared_spotify_client(monkeypatch):
+    created_clients = []
+
+    class SharedSpotifyStub(SpotifyStub):
+        def __init__(self):
+            super().__init__()
+            created_clients.append(self)
+
+    monkeypatch.setattr("core.metadata_service._shared_spotify_client", None)
+    monkeypatch.setattr("core.metadata_service.get_configured_primary_metadata_source", lambda default="deezer": "spotify")
+    monkeypatch.setattr("core.metadata_service.SpotifyClient", SharedSpotifyStub)
+
+    first_client, first_provider = get_primary_metadata_client()
+    second_client, second_provider = get_primary_metadata_client()
+
+    assert first_provider == "spotify"
+    assert second_provider == "spotify"
+    assert first_client is second_client
+    assert len(created_clients) == 1
+
+
+def test_metadata_service_auto_uses_configured_primary_provider(monkeypatch):
+    spotify_client = SpotifyStub()
+    service = MetadataService.__new__(MetadataService)
+    service.preferred_provider = "auto"
+    service.spotify = spotify_client
+    service._primary_source = "deezer"
+    service.non_spotify = FallbackAlbumsClient()
+    service.itunes = FallbackAlbumsClient()
+
+    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda *_args, **_kwargs: "deezer")
+
+    assert service.get_active_provider() == "deezer"
+
+
+def test_metadata_service_primary_is_compatibility_alias_for_auto(monkeypatch):
+    spotify_client = SpotifyStub()
+    service = MetadataService.__new__(MetadataService)
+    service.preferred_provider = "primary"
+    service.spotify = spotify_client
+    service._primary_source = "deezer"
+    service.non_spotify = FallbackAlbumsClient()
+    service.itunes = FallbackAlbumsClient()
+
+    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda *_args, **_kwargs: "deezer")
+
+    assert service.get_active_provider() == "deezer"
 
 
 def test_seasonal_discovery_uses_primary_client_not_spotify(monkeypatch):
@@ -212,9 +279,9 @@ def test_seasonal_discovery_uses_primary_client_not_spotify(monkeypatch):
     monkeypatch.setattr(SeasonalDiscoveryService, "_ensure_database_schema", lambda self: None)
     monkeypatch.setattr(
         "core.metadata_service.get_primary_metadata_client",
-        lambda spotify: (fallback_client, "deezer"),
+        lambda *_args, **_kwargs: (fallback_client, "deezer"),
     )
-    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda spotify: "deezer")
+    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda *_args, **_kwargs: "deezer")
 
     service = SeasonalDiscoveryService(spotify_client, SeasonalDbStub())
     albums = service._search_watchlist_seasonal_albums("christmas")
@@ -230,9 +297,9 @@ def test_build_custom_playlist_uses_primary_client_for_album_fetches(monkeypatch
 
     monkeypatch.setattr(
         "core.metadata_service.get_primary_metadata_client",
-        lambda spotify: (fallback_client, "deezer"),
+        lambda *_args, **_kwargs: (fallback_client, "deezer"),
     )
-    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda spotify: "deezer")
+    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda *_args, **_kwargs: "deezer")
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
 
     service = PersonalizedPlaylistsService(PlaylistDbStub(), spotify_client)
@@ -249,9 +316,9 @@ def test_build_custom_playlist_resolves_cached_similar_artists_for_deezer_seed(m
 
     monkeypatch.setattr(
         "core.metadata_service.get_primary_metadata_client",
-        lambda spotify: (fallback_client, "deezer"),
+        lambda *_args, **_kwargs: (fallback_client, "deezer"),
     )
-    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda spotify: "deezer")
+    monkeypatch.setattr("core.metadata_service.get_primary_metadata_source", lambda *_args, **_kwargs: "deezer")
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
 
     service = PersonalizedPlaylistsService(PlaylistDbWithMappedSimilarStub(), spotify_client)

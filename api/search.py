@@ -14,7 +14,7 @@ def register_routes(bp):
     def search_tracks():
         """Search for tracks across music sources.
 
-        Body: {"query": "...", "source": "spotify"|"itunes"|"auto", "limit": 20}
+        Body: {"query": "...", "source": "spotify"|"itunes"|"deezer"|"discogs"|"hydrabase"|"auto", "limit": 20}
         """
         body = request.get_json(silent=True) or {}
         query = body.get("query", "").strip()
@@ -26,38 +26,16 @@ def register_routes(bp):
 
         try:
             ctx = current_app.soulsync
-            tracks = []
-
-            # Hydrabase first when active
-            hydrabase = ctx.get("hydrabase_client")
-            if source == "auto" and hydrabase:
-                try:
-                    from web_server import _is_hydrabase_active
-                    if _is_hydrabase_active():
-                        hydra_results = hydrabase.search_tracks(query, limit=limit)
-                        if hydra_results:
-                            tracks = [_serialize_track(t) for t in hydra_results]
-                            return api_success({"tracks": tracks, "source": "hydrabase"})
-                except Exception:
-                    pass
-
             spotify = ctx.get("spotify_client")
-            if source in ("spotify", "auto") and spotify and spotify.is_authenticated():
-                results = spotify.search_tracks(query, limit=limit)
-                if results:
-                    tracks = [_serialize_track(t) for t in results]
-                    return api_success({"tracks": tracks, "source": "spotify"})
+            from core.metadata_service import get_metadata_client_for_source
 
-            if source in ("itunes", "deezer", "auto"):
-                from core.metadata_service import _create_fallback_client, _get_configured_fallback_source
-                fallback = _create_fallback_client()
-                fallback_source = _get_configured_fallback_source()
-                results = fallback.search_tracks(query, limit=limit)
-                if results:
-                    tracks = [_serialize_track(t) for t in results]
-                    return api_success({"tracks": tracks, "source": fallback_source})
+            client, resolved_source = get_metadata_client_for_source(source, spotify_client=spotify)
+            if resolved_source == "spotify" and spotify and not spotify.is_spotify_authenticated():
+                return api_success({"tracks": [], "source": "spotify"})
 
-            return api_success({"tracks": [], "source": source})
+            results = client.search_tracks(query, limit=limit)
+            tracks = [_serialize_track(t) for t in results] if results else []
+            return api_success({"tracks": tracks, "source": resolved_source})
         except Exception as e:
             return api_error("SEARCH_ERROR", str(e), 500)
 
@@ -78,21 +56,13 @@ def register_routes(bp):
         try:
             ctx = current_app.soulsync
             spotify = ctx.get("spotify_client")
-            if spotify and spotify.is_authenticated():
-                results = spotify.search_albums(query, limit=limit)
-                if results:
-                    return api_success({
-                        "albums": [_serialize_album(a) for a in results],
-                        "source": "spotify",
-                    })
+            from core.metadata_service import get_metadata_client_for_source
 
-            from core.metadata_service import _create_fallback_client, _get_configured_fallback_source
-            fallback = _create_fallback_client()
-            fallback_source = _get_configured_fallback_source()
-            results = fallback.search_albums(query, limit=limit)
+            client, resolved_source = get_metadata_client_for_source("auto", spotify_client=spotify)
+            results = client.search_albums(query, limit=limit)
             return api_success({
                 "albums": [_serialize_album(a) for a in results] if results else [],
-                "source": fallback_source,
+                "source": resolved_source,
             })
         except Exception as e:
             return api_error("SEARCH_ERROR", str(e), 500)
@@ -114,21 +84,13 @@ def register_routes(bp):
         try:
             ctx = current_app.soulsync
             spotify = ctx.get("spotify_client")
-            if spotify and spotify.is_authenticated():
-                results = spotify.search_artists(query, limit=limit)
-                if results:
-                    return api_success({
-                        "artists": [_serialize_artist(a) for a in results],
-                        "source": "spotify",
-                    })
+            from core.metadata_service import get_metadata_client_for_source
 
-            from core.metadata_service import _create_fallback_client, _get_configured_fallback_source
-            fallback = _create_fallback_client()
-            fallback_source = _get_configured_fallback_source()
-            results = fallback.search_artists(query, limit=limit)
+            client, resolved_source = get_metadata_client_for_source("auto", spotify_client=spotify)
+            results = client.search_artists(query, limit=limit)
             return api_success({
                 "artists": [_serialize_artist(a) for a in results] if results else [],
-                "source": fallback_source,
+                "source": resolved_source,
             })
         except Exception as e:
             return api_error("SEARCH_ERROR", str(e), 500)

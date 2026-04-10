@@ -5846,7 +5846,8 @@ async function loadSettingsData() {
         document.getElementById('discogs-token').value = settings.discogs?.token || '';
 
         // Populate Metadata source setting
-        document.getElementById('metadata-fallback-source').value = settings.metadata?.fallback_source || 'itunes';
+        document.getElementById('metadata-primary-source').value =
+            settings.metadata?.primary_source || settings.metadata?.fallback_source || 'deezer';
 
         // Populate Hydrabase settings
         const hbConfig = settings.hydrabase || {};
@@ -5861,7 +5862,7 @@ async function loadSettingsData() {
                 if (btn) btn.textContent = 'Disconnect';
                 if (statusEl) { statusEl.textContent = 'Connected'; statusEl.style.color = '#4caf50'; }
                 // Add Hydrabase to fallback source dropdown
-                const fbSelect = document.getElementById('metadata-fallback-source');
+                const fbSelect = document.getElementById('metadata-primary-source');
                 if (fbSelect && !fbSelect.querySelector('option[value="hydrabase"]')) {
                     const opt = document.createElement('option');
                     opt.value = 'hydrabase';
@@ -5869,7 +5870,7 @@ async function loadSettingsData() {
                     fbSelect.appendChild(opt);
                 }
                 // Restore selection if it was hydrabase
-                if ((settings.metadata?.fallback_source) === 'hydrabase') {
+                if ((settings.metadata?.primary_source || settings.metadata?.fallback_source) === 'hydrabase') {
                     fbSelect.value = 'hydrabase';
                 }
             }
@@ -6569,12 +6570,12 @@ async function toggleHydrabaseFromSettings() {
             await fetch('/api/hydrabase/disconnect', { method: 'POST' });
             if (btn) btn.textContent = 'Connect';
             if (statusEl) { statusEl.textContent = 'Disconnected'; statusEl.style.color = 'rgba(255,255,255,0.4)'; }
-            // Remove from fallback dropdown + reset to iTunes if was selected
-            const fbSel2 = document.getElementById('metadata-fallback-source');
+            // Remove from primary-source dropdown + reset to Deezer if Hydrabase was selected
+            const fbSel2 = document.getElementById('metadata-primary-source');
             if (fbSel2) {
                 const hbOpt = fbSel2.querySelector('option[value="hydrabase"]');
                 if (hbOpt) {
-                    if (fbSel2.value === 'hydrabase') fbSel2.value = 'itunes';
+                    if (fbSel2.value === 'hydrabase') fbSel2.value = 'deezer';
                     hbOpt.remove();
                 }
             }
@@ -6590,8 +6591,8 @@ async function toggleHydrabaseFromSettings() {
             if (data.success) {
                 if (btn) btn.textContent = 'Disconnect';
                 if (statusEl) { statusEl.textContent = 'Connected'; statusEl.style.color = '#4caf50'; }
-                // Add to fallback dropdown
-                const fbSel = document.getElementById('metadata-fallback-source');
+                // Add to primary-source dropdown
+                const fbSel = document.getElementById('metadata-primary-source');
                 if (fbSel && !fbSel.querySelector('option[value="hydrabase"]')) {
                     const opt = document.createElement('option');
                     opt.value = 'hydrabase';
@@ -7044,7 +7045,7 @@ async function saveSettings(quiet = false) {
             token: document.getElementById('discogs-token').value,
         },
         metadata: {
-            fallback_source: document.getElementById('metadata-fallback-source').value || 'itunes'
+            primary_source: document.getElementById('metadata-primary-source').value || 'deezer'
         },
         hydrabase: {
             url: document.getElementById('hydrabase-url').value,

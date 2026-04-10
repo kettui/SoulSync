@@ -99,7 +99,7 @@ class SeasonalDiscoveryService:
         """Determine active music source (matches _get_active_discovery_source in web_server)"""
         try:
             from core.metadata_service import get_primary_metadata_source
-            return get_primary_metadata_source(self.spotify_client)
+            return get_primary_metadata_source()
         except Exception:
             return 'itunes'
 
@@ -446,7 +446,7 @@ class SeasonalDiscoveryService:
             seasonal_albums = []
             from core.metadata_service import get_primary_metadata_client, log_artist_album_fetch
 
-            primary_client, source = get_primary_metadata_client(self.spotify_client)
+            primary_client, source = get_primary_metadata_client()
             use_spotify = source == 'spotify'
 
             # IMPROVED: Sample 20 random watchlist artists (up from 10) for more variety

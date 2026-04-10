@@ -148,7 +148,7 @@ class ArtistSearchWorker(QThread):
         try:
             from core.metadata_service import get_primary_metadata_client
 
-            active_client, _provider = get_primary_metadata_client(self.spotify_client)
+            active_client, _provider = get_primary_metadata_client()
             artists = active_client.search_artists(self.query, limit=10)
             
             # Create artist matches with confidence scores
@@ -187,7 +187,7 @@ class AlbumFetchWorker(QThread):
 
             print(f"🎵 Fetching all releases (albums & singles) for artist: {self.artist.name} (ID: {self.artist.id})")
 
-            active_client, provider = get_primary_metadata_client(self.spotify_client)
+            active_client, provider = get_primary_metadata_client()
             artist_id = self.artist.id
 
             if provider != 'spotify' and not str(artist_id).isdigit():
@@ -5521,4 +5521,3 @@ class ArtistsPage(QWidget):
         """Handle page close/cleanup"""
         self.stop_all_workers()
         super().closeEvent(event)
-
