@@ -404,7 +404,7 @@ class WatchlistScanner:
     def _get_active_client_and_artist_id(self, watchlist_artist: WatchlistArtist):
         """
         Get the appropriate client and artist ID based on active provider.
-        If iTunes ID is missing, searches by artist name to find and cache it.
+        If the active provider ID is missing, searches by artist name to find and cache it.
 
         Returns:
             Tuple of (client, artist_id, provider_name) or (None, None, None) if no valid ID
@@ -417,39 +417,41 @@ class WatchlistScanner:
             else:
                 logger.warning(f"No Spotify ID for {watchlist_artist.artist_name}, cannot scan with Spotify")
                 return (None, None, None)
-        else:  # itunes or deezer fallback
-            fallback_source = provider  # 'itunes' or 'deezer'
-            fallback_client = self.metadata_service.itunes  # May be iTunesClient or DeezerClient
-            # Pick the right stored ID for the active fallback source
-            stored_id = watchlist_artist.deezer_artist_id if fallback_source == 'deezer' else watchlist_artist.itunes_artist_id
-            if stored_id:
-                return (fallback_client, stored_id, fallback_source)
-            else:
-                # No ID stored for this source - search by name and cache it
-                logger.info(f"No {fallback_source} ID for {watchlist_artist.artist_name}, searching by name...")
-                try:
-                    search_results = fallback_client.search_artists(watchlist_artist.artist_name, limit=1)
-                    if search_results and len(search_results) > 0:
-                        found_id = search_results[0].id
-                        logger.info(f"Found {fallback_source} ID {found_id} for {watchlist_artist.artist_name}")
-                        # Cache the ID in the database for future use
-                        if fallback_source == 'deezer':
-                            self.database.update_watchlist_artist_deezer_id(
-                                watchlist_artist.spotify_artist_id or str(watchlist_artist.id),
-                                found_id
-                            )
-                        else:
-                            self.database.update_watchlist_artist_itunes_id(
-                                watchlist_artist.spotify_artist_id or str(watchlist_artist.id),
-                                found_id
-                            )
-                        return (fallback_client, found_id, fallback_source)
-                    else:
-                        logger.warning(f"Could not find {watchlist_artist.artist_name} on {fallback_source}")
-                        return (None, None, None)
-                except Exception as e:
-                    logger.error(f"Error searching {fallback_source} for {watchlist_artist.artist_name}: {e}")
-                    return (None, None, None)
+
+        provider_id_attr = {
+            'itunes': 'itunes_artist_id',
+            'deezer': 'deezer_artist_id',
+            'discogs': 'discogs_artist_id',
+        }.get(provider)
+        update_provider_id = {
+            'itunes': getattr(self.database, 'update_watchlist_itunes_id', None),
+            'deezer': getattr(self.database, 'update_watchlist_deezer_id', None),
+            'discogs': getattr(self.database, 'update_watchlist_discogs_id', None),
+        }.get(provider)
+
+        if not provider_id_attr or not update_provider_id:
+            logger.warning(f"Watchlist scanning does not support provider-specific artist IDs for {provider}")
+            return (None, None, None)
+
+        metadata_client = self.metadata_service.non_spotify
+        stored_id = getattr(watchlist_artist, provider_id_attr, None)
+        if stored_id:
+            return (metadata_client, stored_id, provider)
+
+        logger.info(f"No {provider} ID for {watchlist_artist.artist_name}, searching by name...")
+        try:
+            search_results = metadata_client.search_artists(watchlist_artist.artist_name, limit=1)
+            if search_results and len(search_results) > 0:
+                found_id = search_results[0].id
+                logger.info(f"Found {provider} ID {found_id} for {watchlist_artist.artist_name}")
+                update_provider_id(watchlist_artist.id, found_id)
+                return (metadata_client, found_id, provider)
+
+            logger.warning(f"Could not find {watchlist_artist.artist_name} on {provider}")
+            return (None, None, None)
+        except Exception as e:
+            logger.error(f"Error searching {provider} for {watchlist_artist.artist_name}: {e}")
+            return (None, None, None)
 
     def get_active_client_and_artist_id(self, watchlist_artist: WatchlistArtist):
         """

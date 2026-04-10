@@ -32305,10 +32305,10 @@ def _run_playlist_discovery_worker(playlists, automation_id=None):
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        itunes_client_instance = None
+        metadata_client_instance = None
         if not use_spotify:
             try:
-                itunes_client_instance = _get_primary_metadata_client_instance()
+                metadata_client_instance = _get_primary_metadata_client_instance()
             except Exception:
                 print(f"❌ Neither Spotify nor {_get_primary_metadata_source()} available for discovery")
                 _update_automation_progress(automation_id, status='error', progress=100,
@@ -32435,7 +32435,7 @@ def _run_playlist_discovery_worker(playlists, automation_id=None):
                         if use_spotify:
                             results = spotify_client.search_tracks(search_query, limit=10)
                         else:
-                            results = itunes_client_instance.search_tracks(search_query, limit=10)
+                            results = metadata_client_instance.search_tracks(search_query, limit=10)
                         if not results:
                             continue
 
@@ -32459,7 +32459,7 @@ def _run_playlist_discovery_worker(playlists, automation_id=None):
                         if use_spotify:
                             extended = spotify_client.search_tracks(query, limit=50)
                         else:
-                            extended = itunes_client_instance.search_tracks(query, limit=50)
+                            extended = metadata_client_instance.search_tracks(query, limit=50)
                         if extended:
                             match, confidence, _ = _discovery_score_candidates(
                                 track_name, artist_name, duration_ms, extended
@@ -32708,7 +32708,7 @@ def _discovery_score_candidates(source_title, source_artist, source_duration_ms,
 
 
 def _run_tidal_discovery_worker(playlist_id):
-    """Background worker for Tidal discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for Tidal discovery process (Spotify or primary metadata source)"""
     _ew_state = {}
     try:
         _ew_state = _pause_enrichment_workers('Tidal discovery')
@@ -32719,10 +32719,10 @@ def _run_tidal_discovery_worker(playlist_id):
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Initialize fallback client if needed
-        itunes_client_instance = None
+        # Initialize the primary metadata client if needed
+        metadata_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_primary_metadata_client_instance()
+            metadata_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Tidal discovery for: {playlist.name} (using {discovery_source.upper()})")
 
@@ -32770,7 +32770,7 @@ def _run_tidal_discovery_worker(playlist_id):
                 track_result = _search_spotify_for_tidal_track(
                     tidal_track,
                     use_spotify=use_spotify,
-                    itunes_client=itunes_client_instance
+                    metadata_client=metadata_client_instance
                 )
 
                 # Create result entry - use 'match_data' as generic key for both providers
@@ -32898,13 +32898,13 @@ def _run_tidal_discovery_worker(playlist_id):
         _resume_enrichment_workers(_ew_state, 'Tidal discovery')
 
 
-def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client=None):
+def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, metadata_client=None):
     """Search Spotify/fallback for a Tidal track using matching_engine for better accuracy
 
     Args:
         tidal_track: The Tidal track to search for
         use_spotify: If True, use Spotify; if False, use fallback source
-        itunes_client: Fallback client instance (required when use_spotify=False)
+        metadata_client: Primary metadata client instance (required when use_spotify=False)
 
     Returns:
         For Spotify: (Track, raw_data, confidence) tuple or None
@@ -32914,7 +32914,7 @@ def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client
         if not spotify_client or not spotify_client.is_authenticated():
             return None
     else:
-        if not itunes_client:
+        if not metadata_client:
             return None
 
     try:
@@ -32969,7 +32969,7 @@ def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client
                     if not results:
                         continue
                 else:
-                    results = itunes_client.search_tracks(search_query, limit=10)
+                    results = metadata_client.search_tracks(search_query, limit=10)
                     if not results:
                         continue
 
@@ -33003,7 +33003,7 @@ def _search_spotify_for_tidal_track(tidal_track, use_spotify=True, itunes_client
             if use_spotify:
                 extended_results = spotify_client.search_tracks(query, limit=50)
             else:
-                extended_results = itunes_client.search_tracks(query, limit=50)
+                extended_results = metadata_client.search_tracks(query, limit=50)
             if extended_results:
                 match, confidence, match_idx = _discovery_score_candidates(
                     track_name, artist_name, source_duration, extended_results
@@ -33771,7 +33771,7 @@ def update_deezer_playlist_phase(playlist_id):
 
 
 def _run_deezer_discovery_worker(playlist_id):
-    """Background worker for Deezer discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for Deezer discovery process (Spotify or primary metadata source)"""
     _ew_state = {}
     try:
         _ew_state = _pause_enrichment_workers('Deezer discovery')
@@ -33782,10 +33782,10 @@ def _run_deezer_discovery_worker(playlist_id):
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Initialize fallback client if needed
-        itunes_client_instance = None
+        # Initialize the primary metadata client if needed
+        metadata_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_primary_metadata_client_instance()
+            metadata_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Deezer discovery for: {playlist['name']} (using {discovery_source.upper()})")
 
@@ -33867,7 +33867,7 @@ def _run_deezer_discovery_worker(playlist_id):
                 track_result = _search_spotify_for_tidal_track(
                     track_ns,
                     use_spotify=use_spotify,
-                    itunes_client=itunes_client_instance
+                    metadata_client=metadata_client_instance
                 )
 
                 # Create result entry
@@ -34590,7 +34590,7 @@ def update_spotify_public_playlist_phase(url_hash):
 
 
 def _run_spotify_public_discovery_worker(url_hash):
-    """Background worker for Spotify Public discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for Spotify Public discovery process (Spotify or primary metadata source)"""
     _ew_state = {}
     try:
         _ew_state = _pause_enrichment_workers('Spotify Public discovery')
@@ -34601,10 +34601,10 @@ def _run_spotify_public_discovery_worker(url_hash):
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Initialize fallback client if needed
-        itunes_client_instance = None
+        # Initialize the primary metadata client if needed
+        metadata_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_primary_metadata_client_instance()
+            metadata_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🎵 Starting Spotify Public discovery for: {playlist['name']} (using {discovery_source.upper()})")
 
@@ -34697,7 +34697,7 @@ def _run_spotify_public_discovery_worker(url_hash):
                 track_result = _search_spotify_for_tidal_track(
                     track_ns,
                     use_spotify=use_spotify,
-                    itunes_client=itunes_client_instance
+                    metadata_client=metadata_client_instance
                 )
 
                 # Create result entry
@@ -35300,7 +35300,7 @@ def update_youtube_discovery_match():
 
 
 def _run_youtube_discovery_worker(url_hash):
-    """Background worker for YouTube music discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for YouTube music discovery process (Spotify or primary metadata source)"""
     _ew_state = {}
     try:
         _ew_state = _pause_enrichment_workers('YouTube discovery')
@@ -35308,12 +35308,12 @@ def _run_youtube_discovery_worker(url_hash):
         playlist = state['playlist']
         tracks = playlist['tracks']
 
-        # Determine which provider to use (Spotify preferred, iTunes fallback)
+        # Determine which provider to use (Spotify or the configured primary metadata source)
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Get fallback client
-        itunes_client = _get_primary_metadata_client_instance()
+        # Get the primary metadata client for non-Spotify discovery
+        metadata_client = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source} discovery for {len(tracks)} YouTube tracks...")
 
@@ -35397,7 +35397,7 @@ def _run_youtube_discovery_worker(url_hash):
                         if use_spotify and not _spotify_rate_limited():
                             search_results = spotify_client.search_tracks(search_query, limit=10)
                         else:
-                            search_results = itunes_client.search_tracks(search_query, limit=10)
+                            search_results = metadata_client.search_tracks(search_query, limit=10)
 
                         if not search_results:
                             continue
@@ -35436,7 +35436,7 @@ def _run_youtube_discovery_worker(url_hash):
                         fallback_results = spotify_client.search_tracks(query, limit=5)
                     else:
                         query = f"{cleaned_title} {cleaned_artist}"
-                        fallback_results = itunes_client.search_tracks(query, limit=5)
+                        fallback_results = metadata_client.search_tracks(query, limit=5)
                     if fallback_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, fallback_results
@@ -35455,7 +35455,7 @@ def _run_youtube_discovery_worker(url_hash):
                     if use_spotify:
                         fallback_results = spotify_client.search_tracks(query, limit=5)
                     else:
-                        fallback_results = itunes_client.search_tracks(query, limit=5)
+                        fallback_results = metadata_client.search_tracks(query, limit=5)
                     if fallback_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, fallback_results
@@ -35472,7 +35472,7 @@ def _run_youtube_discovery_worker(url_hash):
                     if use_spotify:
                         extended_results = spotify_client.search_tracks(query, limit=50)
                     else:
-                        extended_results = itunes_client.search_tracks(query, limit=50)
+                        extended_results = metadata_client.search_tracks(query, limit=50)
                     if extended_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, extended_results
@@ -35613,7 +35613,7 @@ def _run_youtube_discovery_worker(url_hash):
         _resume_enrichment_workers(_ew_state, 'YouTube discovery')
 
 def _run_listenbrainz_discovery_worker(state_key):
-    """Background worker for ListenBrainz music discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for ListenBrainz music discovery process (Spotify or primary metadata source)"""
     playlist_mbid = state_key.split(':', 1)[1] if ':' in state_key else state_key
     _ew_state = {}
     try:
@@ -35622,12 +35622,12 @@ def _run_listenbrainz_discovery_worker(state_key):
         playlist = state['playlist']
         tracks = playlist['tracks']
 
-        # Determine which provider to use (Spotify preferred, iTunes fallback)
+        # Determine which provider to use (Spotify or the configured primary metadata source)
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Get fallback client
-        itunes_client = _get_primary_metadata_client_instance()
+        # Get the primary metadata client for non-Spotify discovery
+        metadata_client = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source} discovery for {len(tracks)} ListenBrainz tracks...")
 
@@ -35709,7 +35709,7 @@ def _run_listenbrainz_discovery_worker(state_key):
                         if use_spotify and not _spotify_rate_limited():
                             search_results = spotify_client.search_tracks(search_query, limit=10)
                         else:
-                            search_results = itunes_client.search_tracks(search_query, limit=10)
+                            search_results = metadata_client.search_tracks(search_query, limit=10)
 
                         if not search_results:
                             continue
@@ -35748,7 +35748,7 @@ def _run_listenbrainz_discovery_worker(state_key):
                         fallback_results = spotify_client.search_tracks(query, limit=5)
                     else:
                         query = f"{cleaned_title} {cleaned_artist}"
-                        fallback_results = itunes_client.search_tracks(query, limit=5)
+                        fallback_results = metadata_client.search_tracks(query, limit=5)
                     if fallback_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, fallback_results
@@ -35766,7 +35766,7 @@ def _run_listenbrainz_discovery_worker(state_key):
                         fallback_results = spotify_client.search_tracks(query, limit=5)
                     else:
                         query = f"{cleaned_artist} {album_name} {cleaned_title}"
-                        fallback_results = itunes_client.search_tracks(query, limit=5)
+                        fallback_results = metadata_client.search_tracks(query, limit=5)
                     if fallback_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, fallback_results
@@ -35783,7 +35783,7 @@ def _run_listenbrainz_discovery_worker(state_key):
                     if use_spotify:
                         extended_results = spotify_client.search_tracks(query, limit=50)
                     else:
-                        extended_results = itunes_client.search_tracks(query, limit=50)
+                        extended_results = metadata_client.search_tracks(query, limit=50)
                     if extended_results:
                         match, confidence, _ = _discovery_score_candidates(
                             cleaned_title, cleaned_artist, source_duration, extended_results
@@ -40143,8 +40143,8 @@ def get_discover_hero():
         active_source = _get_active_discovery_source()
         print(f"🎵 Discover hero using source: {active_source}")
 
-        # Import fallback client for non-Spotify lookups
-        itunes_client = _get_primary_metadata_client_instance()
+        # Get the active primary metadata client for non-Spotify lookups
+        metadata_client = _get_primary_metadata_client_instance()
 
         # Get top similar artists (excluding watchlist, cycled by last_featured)
         # Fetch more than needed since strict source filtering may drop many
@@ -40210,7 +40210,7 @@ def get_discover_hero():
                     continue
                 # Try to resolve ID by name
                 try:
-                    search_results = itunes_client.search_artists(artist.similar_artist_name, limit=1)
+                    search_results = metadata_client.search_artists(artist.similar_artist_name, limit=1)
                     if search_results and len(search_results) > 0:
                         resolved_id = search_results[0].id
                         # Cache the resolved ID for future use
@@ -40286,7 +40286,7 @@ def get_discover_hero():
                         fb_artist_id = getattr(artist, 'similar_artist_deezer_id', None) if active_source == 'deezer' else None
                         fb_artist_id = fb_artist_id or artist.similar_artist_itunes_id
                         if fb_artist_id:
-                            fb_artist_data = itunes_client.get_artist(fb_artist_id)
+                            fb_artist_data = metadata_client.get_artist(fb_artist_id)
                             if fb_artist_data:
                                 artist_data['artist_name'] = fb_artist_data.get('name', artist.similar_artist_name)
                                 artist_data['image_url'] = fb_artist_data.get('images', [{}])[0].get('url') if fb_artist_data.get('images') else None
@@ -46073,7 +46073,7 @@ def clean_beatport_text(text):
     return text
 
 def _run_beatport_discovery_worker(url_hash):
-    """Background worker for Beatport discovery process (Spotify preferred, iTunes fallback)"""
+    """Background worker for Beatport discovery process (Spotify or primary metadata source)"""
     _ew_state = {}
     try:
         _ew_state = _pause_enrichment_workers('Beatport discovery')
@@ -46085,10 +46085,10 @@ def _run_beatport_discovery_worker(url_hash):
         use_spotify = spotify_client and spotify_client.is_spotify_authenticated()
         discovery_source = 'spotify' if use_spotify else _get_primary_metadata_source()
 
-        # Initialize fallback client if needed
-        itunes_client_instance = None
+        # Initialize the primary metadata client if needed
+        metadata_client_instance = None
         if not use_spotify:
-            itunes_client_instance = _get_primary_metadata_client_instance()
+            metadata_client_instance = _get_primary_metadata_client_instance()
 
         print(f"🔍 Starting {discovery_source.upper()} discovery for {len(tracks)} Beatport tracks...")
 
@@ -46188,7 +46188,7 @@ def _run_beatport_discovery_worker(url_hash):
                         if use_spotify and not _spotify_rate_limited():
                             search_results = spotify_client.search_tracks(search_query, limit=10)
                         else:
-                            search_results = itunes_client_instance.search_tracks(search_query, limit=10)
+                            search_results = metadata_client_instance.search_tracks(search_query, limit=10)
 
                         if not search_results:
                             continue
@@ -46223,7 +46223,7 @@ def _run_beatport_discovery_worker(url_hash):
                     if use_spotify:
                         extended_results = spotify_client.search_tracks(query, limit=50)
                     else:
-                        extended_results = itunes_client_instance.search_tracks(query, limit=50)
+                        extended_results = metadata_client_instance.search_tracks(query, limit=50)
                     if extended_results:
                         match, confidence, _ = _discovery_score_candidates(
                             track_title, track_artist, 0, extended_results

@@ -272,6 +272,19 @@ def test_metadata_service_primary_is_compatibility_alias_for_auto(monkeypatch):
     assert service.get_active_provider() == "deezer"
 
 
+def test_metadata_service_itunes_is_explicit_itunes_not_non_spotify(monkeypatch):
+    spotify_client = SpotifyStub()
+    service = MetadataService.__new__(MetadataService)
+    service.preferred_provider = "itunes"
+    service.spotify = spotify_client
+    service._primary_source = "deezer"
+    service.non_spotify = FallbackAlbumsClient()
+    service.itunes = service.non_spotify
+    service._provider_client_cache = {}
+
+    assert service.get_active_provider() == "itunes"
+
+
 def test_seasonal_discovery_uses_primary_client_not_spotify(monkeypatch):
     fallback_client = FallbackAlbumsClient()
     spotify_client = SpotifyStub()
@@ -410,6 +423,38 @@ def test_watchlist_discography_does_not_fallback_to_spotify_when_primary_provide
 
     assert result == []
     assert calls == [(fallback_client, "222")]
+
+
+def test_watchlist_active_client_and_artist_id_supports_discogs(monkeypatch):
+    fallback_client = FallbackAlbumsClient()
+    spotify_client = SpotifyStub()
+    scanner = WatchlistScanner(spotify_client=spotify_client)
+
+    updated_ids = []
+    scanner._metadata_service = types.SimpleNamespace(
+        get_active_provider=lambda: "discogs",
+        non_spotify=fallback_client,
+        spotify=spotify_client,
+    )
+    scanner._database = types.SimpleNamespace(
+        update_watchlist_discogs_id=lambda watchlist_id, discogs_id: updated_ids.append((watchlist_id, discogs_id))
+    )
+
+    artist = types.SimpleNamespace(
+        id=7,
+        artist_name="Discogs Artist",
+        spotify_artist_id="spotify-artist",
+        itunes_artist_id=None,
+        deezer_artist_id=None,
+        discogs_artist_id=None,
+    )
+
+    client, artist_id, provider = scanner.get_active_client_and_artist_id(artist)
+
+    assert provider == "discogs"
+    assert client is fallback_client
+    assert artist_id == "222"
+    assert updated_ids == [(7, "222")]
 
 
 def test_legacy_spotify_discography_helper_accepts_lookback_days(monkeypatch):

@@ -264,10 +264,10 @@ class MetadataService:
         Initialize metadata service.
 
         Args:
-            preferred_provider: "spotify", "itunes", "primary", or "auto" (default)
+            preferred_provider: "spotify", "itunes", "deezer", "discogs", "hydrabase", "primary", or "auto" (default)
                 - "auto": Use the configured primary metadata provider
                 - "spotify": Always use Spotify (may fail if not authenticated)
-                - "itunes": Legacy alias for "use the configured non-Spotify source"
+                - "deezer" / "itunes" / "discogs" / "hydrabase": Always use that explicit provider
                 - "primary": Compatibility alias for "auto"
         """
         self.preferred_provider = preferred_provider
@@ -275,6 +275,7 @@ class MetadataService:
         self._primary_source = get_configured_primary_metadata_source()
         self.non_spotify = non_spotify_client or fallback_client or _get_shared_non_spotify_metadata_client()
         self.itunes = self.non_spotify  # Backward compatibility for callers/tests that still use .itunes
+        self._provider_client_cache: Dict[str, Any] = {}
 
         self._log_initialization()
 
@@ -293,28 +294,56 @@ class MetadataService:
         Returns:
             The effective provider name for this service instance
         """
-        if self.preferred_provider == "spotify":
-            return "spotify"
-        elif self.preferred_provider == "itunes":
-            return get_configured_non_spotify_metadata_source()
-        elif self.preferred_provider in ("primary", "auto"):
-            return get_primary_metadata_source(self.spotify)
-        else:  # auto
-            logger.warning(f"Unknown preferred provider '{self.preferred_provider}', using configured primary provider")
-            return get_primary_metadata_source(self.spotify)
+        _client, provider = self._resolve_client_and_provider()
+        return provider
 
-    def _get_client(self):
-        """Get the appropriate client based on provider selection"""
-        provider = self.get_active_provider()
+    def _get_explicit_provider_client(self, provider: str):
+        """Get or create a client for an explicit provider override."""
+        if provider == "spotify":
+            return self.spotify
+
+        cached = self._provider_client_cache.get(provider)
+        if cached is None:
+            cached, _resolved_provider = get_metadata_client_for_source(provider, spotify_client=self.spotify)
+            self._provider_client_cache[provider] = cached
+        return cached
+
+    def _resolve_configured_provider(self) -> str:
+        """Resolve the configured provider name for this service instance."""
+        if self.preferred_provider in ("primary", "auto"):
+            return get_primary_metadata_source(self.spotify)
+        if self.preferred_provider in _SUPPORTED_METADATA_SOURCES:
+            return self.preferred_provider
+
+        logger.warning(
+            "Unknown preferred provider '%s', using configured primary provider",
+            self.preferred_provider,
+        )
+        return get_primary_metadata_source(self.spotify)
+
+    def _resolve_client_and_provider(self) -> Tuple[Any, str]:
+        """Resolve the effective metadata client and provider for this service instance."""
+        provider = self._resolve_configured_provider()
 
         if provider == "spotify":
             if not self.spotify.is_spotify_authenticated():
                 fallback_source = get_configured_non_spotify_metadata_source()
-                logger.warning(f"Spotify requested but not authenticated, falling back to {fallback_source}")
-                return self.non_spotify
-            return self.spotify
-        else:
-            return self.non_spotify
+                logger.warning(
+                    "Spotify requested but not authenticated, falling back to %s",
+                    fallback_source,
+                )
+                return self.non_spotify, _infer_provider_from_client(self.non_spotify, self.spotify)
+            return self.spotify, "spotify"
+
+        if self.preferred_provider in ("primary", "auto"):
+            return get_primary_metadata_client(self.spotify)
+
+        return self._get_explicit_provider_client(provider), provider
+
+    def _get_client(self):
+        """Get the appropriate client based on provider selection"""
+        client, _provider = self._resolve_client_and_provider()
+        return client
     
     # ==================== Search Methods ====================
     
@@ -451,6 +480,7 @@ class MetadataService:
         """Reload configuration for both clients"""
         logger.info("Reloading metadata service configuration")
         self.spotify.reload_config()
+        self._provider_client_cache = {}
         # Re-create the shared non-Spotify client in case the configured primary changed
         new_source = get_configured_primary_metadata_source()
         if new_source != self._primary_source:
