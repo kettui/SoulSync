@@ -146,8 +146,10 @@ class ArtistSearchWorker(QThread):
     
     def run(self):
         try:
-            # Search for artists using Spotify
-            artists = self.spotify_client.search_artists(self.query, limit=10)
+            from core.metadata_service import get_primary_metadata_client
+
+            active_client, _provider = get_primary_metadata_client(self.spotify_client)
+            artists = active_client.search_artists(self.query, limit=10)
             
             # Create artist matches with confidence scores
             artist_matches = []
@@ -181,10 +183,27 @@ class AlbumFetchWorker(QThread):
     
     def run(self):
         try:
+            from core.metadata_service import get_primary_metadata_client, log_artist_album_fetch
+
             print(f"🎵 Fetching all releases (albums & singles) for artist: {self.artist.name} (ID: {self.artist.id})")
-            
-            # Always fetch both albums and singles from the Spotify API
-            albums = self.spotify_client.get_artist_albums(self.artist.id, album_type='album,single', limit=50)
+
+            active_client, provider = get_primary_metadata_client(self.spotify_client)
+            artist_id = self.artist.id
+
+            if provider != 'spotify' and not str(artist_id).isdigit():
+                search_results = active_client.search_artists(self.artist.name, limit=5)
+                if search_results:
+                    best_match = next((a for a in search_results if a.name.lower().strip() == self.artist.name.lower().strip()), search_results[0])
+                    artist_id = best_match.id
+
+            log_artist_album_fetch(
+                logger,
+                feature="desktop.artists.album_fetch",
+                provider=provider,
+                artist_id=artist_id,
+                artist_name=self.artist.name,
+            )
+            albums = active_client.get_artist_albums(artist_id, album_type='album,single', limit=50)
             
             print(f"📀 Found {len(albums)} total releases for {self.artist.name}")
             
@@ -5502,6 +5521,4 @@ class ArtistsPage(QWidget):
         """Handle page close/cleanup"""
         self.stop_all_workers()
         super().closeEvent(event)
-
-
 

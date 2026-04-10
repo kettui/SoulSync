@@ -126,13 +126,25 @@ class WatchlistScanWorker(QThread):
         try:
             # Get watchlist scanner
             scanner = get_watchlist_scanner(self.spotify_client)
-            
-            # Get artist discography
-            albums = scanner.get_artist_discography(
-                watchlist_artist.spotify_artist_id, 
+
+            active_client, _, provider = scanner.get_active_client_and_artist_id(watchlist_artist)
+            if not active_client:
+                return ScanResult(
+                    artist_name=watchlist_artist.artist_name,
+                    spotify_artist_id=watchlist_artist.spotify_artist_id,
+                    albums_checked=0,
+                    new_tracks_found=0,
+                    tracks_added_to_wishlist=0,
+                    success=False,
+                    error_message="No active metadata provider available for this artist"
+                )
+
+            # Get artist discography using the configured primary provider
+            albums = scanner.get_artist_discography_for_watchlist(
+                watchlist_artist,
                 watchlist_artist.last_scan_timestamp
             )
-            
+
             if albums is None:
                 return ScanResult(
                     artist_name=watchlist_artist.artist_name,
@@ -141,7 +153,7 @@ class WatchlistScanWorker(QThread):
                     new_tracks_found=0,
                     tracks_added_to_wishlist=0,
                     success=False,
-                    error_message="Failed to get artist discography from Spotify"
+                    error_message=f"Failed to get artist discography from {provider}"
                 )
             
             # Analyze the albums list to get total counts upfront
@@ -150,12 +162,17 @@ class WatchlistScanWorker(QThread):
             
             for album in albums:
                 try:
-                    # Get full album data to count tracks
-                    album_data = self.spotify_client.get_album(album.id)
-                    if not album_data or 'tracks' not in album_data:
+                    album_data = active_client.get_album(album.id)
+                    tracks_data = active_client.get_album_tracks(album.id) or {}
+                    tracks = tracks_data.get('items', [])
+                    if (not album_data or not tracks) and self.spotify_client and self.spotify_client is not active_client:
+                        album_data = album_data or self.spotify_client.get_album(album.id)
+                        tracks_data = tracks_data or (self.spotify_client.get_album_tracks(album.id) or {})
+                        tracks = tracks_data.get('items', [])
+                    if not album_data or not tracks:
                         continue
-                    
-                    track_count = len(album_data['tracks'].get('items', []))
+
+                    track_count = len(tracks)
 
                     # Check if user wants this type of release
                     if not scanner._should_include_release(track_count, watchlist_artist):
@@ -196,12 +213,15 @@ class WatchlistScanWorker(QThread):
                     break
                 
                 try:
-                    # Get full album data with tracks first
-                    album_data = self.spotify_client.get_album(album.id)
-                    if not album_data or 'tracks' not in album_data or not album_data['tracks'].get('items'):
+                    album_data = active_client.get_album(album.id)
+                    tracks_data = active_client.get_album_tracks(album.id) or {}
+                    tracks = tracks_data.get('items', [])
+                    if (not album_data or not tracks) and self.spotify_client and self.spotify_client is not active_client:
+                        album_data = album_data or self.spotify_client.get_album(album.id)
+                        tracks_data = tracks_data or (self.spotify_client.get_album_tracks(album.id) or {})
+                        tracks = tracks_data.get('items', [])
+                    if not album_data or not tracks:
                         continue
-                    
-                    tracks = album_data['tracks']['items']
 
                     # Check if user wants this type of release
                     if not scanner._should_include_release(len(tracks), watchlist_artist):

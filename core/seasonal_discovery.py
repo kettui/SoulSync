@@ -97,11 +97,9 @@ class SeasonalDiscoveryService:
 
     def _get_source(self):
         """Determine active music source (matches _get_active_discovery_source in web_server)"""
-        if self.spotify_client and self.spotify_client.is_spotify_authenticated():
-            return 'spotify'
         try:
-            from core.metadata_service import _get_configured_fallback_source
-            return _get_configured_fallback_source()
+            from core.metadata_service import get_primary_metadata_source
+            return get_primary_metadata_source(self.spotify_client)
         except Exception:
             return 'itunes'
 
@@ -446,29 +444,41 @@ class SeasonalDiscoveryService:
                 return []
 
             seasonal_albums = []
-            source = self._get_source()
-            use_spotify = self.spotify_client and self.spotify_client.is_authenticated()
+            from core.metadata_service import get_primary_metadata_client, log_artist_album_fetch
+
+            primary_client, source = get_primary_metadata_client(self.spotify_client)
+            use_spotify = source == 'spotify'
 
             # IMPROVED: Sample 20 random watchlist artists (up from 10) for more variety
             sampled_artists = random.sample(watchlist_artists, min(20, len(watchlist_artists)))
-
-            from core.metadata_service import _create_fallback_client, _get_configured_fallback_source
-            fallback_client = _create_fallback_client()
-            fallback_source = _get_configured_fallback_source()
 
             for artist in sampled_artists:
                 try:
                     albums = []
                     if use_spotify and artist.spotify_artist_id:
+                        log_artist_album_fetch(
+                            logger,
+                            feature="seasonal_discovery.watchlist",
+                            provider=source,
+                            artist_id=artist.spotify_artist_id,
+                            artist_name=artist.artist_name,
+                        )
                         albums = self.spotify_client.get_artist_albums(
                             artist.spotify_artist_id,
                             album_type='album,single,ep',
                             limit=50
                         ) or []
                     elif not use_spotify:
-                        artist_id = getattr(artist, 'deezer_artist_id', None) if fallback_source == 'deezer' else getattr(artist, 'itunes_artist_id', None)
+                        artist_id = getattr(artist, 'deezer_artist_id', None) if source == 'deezer' else getattr(artist, 'itunes_artist_id', None)
                         if artist_id:
-                            albums = fallback_client.get_artist_albums(
+                            log_artist_album_fetch(
+                                logger,
+                                feature="seasonal_discovery.watchlist",
+                                provider=source,
+                                artist_id=artist_id,
+                                artist_name=artist.artist_name,
+                            )
+                            albums = primary_client.get_artist_albums(
                                 artist_id,
                                 album_type='album,single,ep',
                                 limit=50

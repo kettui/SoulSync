@@ -6,14 +6,14 @@ fallback source (iTunes or Deezer) when not.
 Provides unified interface for all metadata operations.
 """
 
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
 from core.spotify_client import SpotifyClient
 from core.itunes_client import iTunesClient
 from utils.logging_config import get_logger
 
 logger = get_logger("metadata_service")
 
-MetadataProvider = Literal["spotify", "itunes", "auto"]
+MetadataProvider = Literal["spotify", "itunes", "auto", "primary"]
 
 
 def _get_configured_fallback_source():
@@ -31,6 +31,16 @@ def _create_fallback_client():
     if source == 'deezer':
         from core.deezer_client import DeezerClient
         return DeezerClient()
+    if source == 'discogs':
+        try:
+            from config.settings import config_manager
+            token = config_manager.get('discogs.token', '')
+            if token:
+                from core.discogs_client import DiscogsClient
+                return DiscogsClient(token=token)
+        except Exception:
+            pass
+        return iTunesClient()
     if source == 'hydrabase':
         try:
             from core.hydrabase_client import HydrabaseClient
@@ -45,6 +55,71 @@ def _create_fallback_client():
         # Hydrabase not available — fall back to iTunes
         return iTunesClient()
     return iTunesClient()
+
+
+def _infer_provider_from_client(client: Any, spotify_client: Optional[SpotifyClient] = None) -> str:
+    """Infer the effective provider name from a metadata client instance."""
+    if spotify_client is not None and client is spotify_client:
+        return "spotify"
+    class_name = client.__class__.__name__.lower()
+    if "deezer" in class_name:
+        return "deezer"
+    if "discogs" in class_name:
+        return "discogs"
+    if "hydra" in class_name:
+        return "hydrabase"
+    return "itunes"
+
+
+def _resolve_primary_metadata_client(spotify_client: Optional[SpotifyClient] = None) -> Tuple[Any, str]:
+    """Resolve the effective primary metadata client and provider."""
+    configured_source = _get_configured_fallback_source()
+
+    if configured_source == "spotify":
+        client = spotify_client or SpotifyClient()
+        if client.is_spotify_authenticated():
+            return client, "spotify"
+        logger.warning("Configured primary provider is Spotify but Spotify is unavailable; falling back to iTunes")
+        fallback_client = iTunesClient()
+        return fallback_client, "itunes"
+
+    fallback_client = _create_fallback_client()
+    return fallback_client, _infer_provider_from_client(fallback_client, spotify_client)
+
+
+def get_primary_metadata_source(spotify_client: Optional[SpotifyClient] = None) -> str:
+    """Get the configured primary metadata provider for general metadata flows."""
+    return _resolve_primary_metadata_client(spotify_client)[1]
+
+
+def get_primary_metadata_client(spotify_client: Optional[SpotifyClient] = None) -> Tuple[Any, str]:
+    """Get the client and source name for the configured primary metadata provider."""
+    return _resolve_primary_metadata_client(spotify_client)
+
+
+def log_artist_album_fetch(
+    log,
+    *,
+    feature: str,
+    provider: str,
+    artist_id: str,
+    fetch_mode: str = "active_provider",
+    skip_cache: bool = False,
+    artist_name: Optional[str] = None,
+):
+    """Emit a structured log line for artist album fetches."""
+    artist_id_str = str(artist_id or "")
+    id_kind = "numeric" if artist_id_str.isdigit() else "opaque"
+    log.info(
+        "artist_album_fetch feature=%s provider=%s fetch_mode=%s id_kind=%s skip_cache=%s artist_id=%s artist_name=%s",
+        feature,
+        provider,
+        fetch_mode,
+        id_kind,
+        skip_cache,
+        artist_id_str,
+        artist_name or "",
+    )
 
 
 class MetadataService:
@@ -63,10 +138,11 @@ class MetadataService:
         Initialize metadata service.
 
         Args:
-            preferred_provider: "spotify", "itunes", or "auto" (default)
+            preferred_provider: "spotify", "itunes", "primary", or "auto" (default)
                 - "auto": Use Spotify if authenticated, else configured fallback
                 - "spotify": Always use Spotify (may fail if not authenticated)
                 - "itunes": Always use configured fallback source
+                - "primary": Use the configured primary metadata source directly
         """
         self.preferred_provider = preferred_provider
         self.spotify = SpotifyClient()
@@ -94,6 +170,8 @@ class MetadataService:
             return "spotify"
         elif self.preferred_provider == "itunes":
             return self._fallback_source
+        elif self.preferred_provider == "primary":
+            return get_primary_metadata_source(self.spotify)
         else:  # auto
             # Use is_spotify_authenticated() to check actual Spotify auth status
             # (is_authenticated() always returns True due to fallback)
@@ -266,5 +344,5 @@ def get_metadata_service() -> MetadataService:
     """
     global _metadata_service_instance
     if _metadata_service_instance is None:
-        _metadata_service_instance = MetadataService()
+        _metadata_service_instance = MetadataService(preferred_provider="primary")
     return _metadata_service_instance

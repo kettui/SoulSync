@@ -9573,28 +9573,27 @@ def get_artist_detail(artist_id):
 
         # Get Spotify discography for proper categorization and missing releases
         spotify_artist_data = None
-        try:
-            spotify_discography = get_spotify_artist_discography(artist_info['name'])
+        if _get_metadata_fallback_source() == 'spotify' and spotify_client and spotify_client.is_spotify_authenticated():
+            try:
+                spotify_discography = get_spotify_artist_discography(artist_info['name'])
 
-            if spotify_discography['success']:
-                print(f"🎵 Spotify discography found - Albums: {len(spotify_discography['albums'])}, EPs: {len(spotify_discography['eps'])}, Singles: {len(spotify_discography['singles'])}")
+                if spotify_discography['success']:
+                    print(f"🎵 Spotify discography found - Albums: {len(spotify_discography['albums'])}, EPs: {len(spotify_discography['eps'])}, Singles: {len(spotify_discography['singles'])}")
 
-                # Store Spotify artist data for the response
-                spotify_artist_data = {
-                    'spotify_artist_id': spotify_discography.get('spotify_artist_id'),
-                    'spotify_artist_name': spotify_discography.get('spotify_artist_name'),
-                    'artist_image': spotify_discography.get('artist_image')
-                }
+                    spotify_artist_data = {
+                        'spotify_artist_id': spotify_discography.get('spotify_artist_id'),
+                        'spotify_artist_name': spotify_discography.get('spotify_artist_name'),
+                        'artist_image': spotify_discography.get('artist_image')
+                    }
 
-                # Merge owned and Spotify data for complete picture
-                merged_discography = merge_discography_data(owned_releases, spotify_discography, db=database, artist_name=artist_info['name'])
-            else:
-                print(f"⚠️ Spotify discography not found: {spotify_discography.get('error', 'Unknown error')}")
-                # Fall back to our database categorization
+                    merged_discography = merge_discography_data(owned_releases, spotify_discography, db=database, artist_name=artist_info['name'])
+                else:
+                    print(f"⚠️ Spotify discography not found: {spotify_discography.get('error', 'Unknown error')}")
+                    merged_discography = owned_releases
+            except Exception as spotify_error:
+                print(f"⚠️ Error fetching Spotify data: {spotify_error}")
                 merged_discography = owned_releases
-        except Exception as spotify_error:
-            print(f"⚠️ Error fetching Spotify data: {spotify_error}")
-            # Fall back to our database categorization
+        else:
             merged_discography = owned_releases
 
         # Compute per-artist track enrichment coverage
@@ -10069,81 +10068,54 @@ def get_artist_discography(artist_id):
         # Determine which source to use
         spotify_available = spotify_client and spotify_client.is_spotify_authenticated()
 
-        # Import fallback client for non-Spotify lookups
-        fallback_client = _get_metadata_fallback_client()
-        fallback_source = _get_metadata_fallback_source()
-
         print(f"🎤 Fetching discography for artist: {artist_id} (name: {artist_name}, spotify: {spotify_available}, source_override: {source_override or 'auto'})")
 
         albums = []
         active_source = None
 
         # Source override: when user clicked from a specific search tab, use that source directly
-        if source_override and source_override in ('spotify', 'itunes', 'deezer'):
+        if source_override and source_override in ('spotify', 'itunes', 'deezer', 'discogs', 'hydrabase'):
             try:
+                override_client = None
+                override_source = source_override
+
                 if source_override == 'spotify' and spotify_available:
-                    albums = spotify_client.get_artist_albums(artist_id, album_type='album,single')
-                    if albums:
-                        active_source = 'spotify'
+                    override_client = spotify_client
                 elif source_override == 'itunes':
                     from core.itunes_client import iTunesClient
-                    itunes_cl = iTunesClient()
-                    albums = itunes_cl.get_artist_albums(artist_id, album_type='album,single', limit=50)
-                    if albums:
-                        active_source = 'itunes'
+                    override_client = iTunesClient()
                 elif source_override == 'deezer':
-                    deezer_cl = _get_deezer_client()
-                    albums = deezer_cl.get_artist_albums(artist_id, album_type='album,single', limit=50)
-                    if albums:
-                        active_source = 'deezer'
+                    override_client = _get_deezer_client()
                 elif source_override == 'discogs':
                     from core.discogs_client import DiscogsClient
-                    discogs_cl = DiscogsClient()
-                    albums = discogs_cl.get_artist_albums(artist_id, album_type='album,single', limit=50)
-                    if albums:
-                        active_source = 'discogs'
+                    override_client = DiscogsClient()
                 elif source_override == 'hydrabase':
                     plugin = request.args.get('plugin', '').lower()
                     if plugin == 'deezer':
-                        hb_cl = _get_deezer_client()
+                        override_client = _get_deezer_client()
+                        override_source = 'deezer'
                     elif plugin == 'itunes' or artist_id.isdigit():
                         from core.itunes_client import iTunesClient
-                        hb_cl = iTunesClient()
+                        override_client = iTunesClient()
+                        override_source = 'itunes'
                     else:
-                        hb_cl = spotify_client
-                    albums = hb_cl.get_artist_albums(artist_id, album_type='album,single', limit=50)
+                        override_client = spotify_client if spotify_available else None
+                        override_source = 'spotify' if spotify_available else 'hydrabase'
+
+                if override_client:
+                    albums, resolved_artist_id = _fetch_artist_albums_for_source(
+                        override_client,
+                        override_source,
+                        artist_id=artist_id,
+                        artist_name=artist_name,
+                        album_type='album,single',
+                        limit=50,
+                        feature='web.artist_discography',
+                        fetch_mode='source_override',
+                    )
                     if albums:
-                        active_source = plugin or 'hydrabase'
-
-                # If direct ID lookup failed but we have artist name, search by name
-                if not albums and artist_name:
-                    if source_override == 'itunes':
-                        from core.itunes_client import iTunesClient
-                        cl = iTunesClient()
-                    elif source_override == 'hydrabase':
-                        plugin = request.args.get('plugin', '').lower()
-                        if plugin == 'deezer':
-                            cl = _get_deezer_client()
-                        else:
-                            from core.itunes_client import iTunesClient
-                            cl = iTunesClient()
-                    elif source_override == 'deezer':
-                        cl = _get_deezer_client()
-                    elif source_override == 'discogs':
-                        from core.discogs_client import DiscogsClient
-                        cl = DiscogsClient()
-                    elif source_override == 'spotify' and spotify_available:
-                        cl = spotify_client
-                    else:
-                        cl = None
-
-                    if cl:
-                        search_artists = cl.search_artists(artist_name, limit=5)
-                        if search_artists:
-                            best = next((a for a in search_artists if a.name.lower() == artist_name.lower()), search_artists[0])
-                            albums = cl.get_artist_albums(best.id, album_type='album,single', limit=50)
-                            if albums:
-                                active_source = source_override
+                        active_source = override_source
+                        print(f"📊 Got {len(albums)} albums from {active_source} (source override, resolved artist ID: {resolved_artist_id})")
 
                 if albums:
                     print(f"📊 Got {len(albums)} albums from {active_source} (source override)")
@@ -10160,50 +10132,23 @@ def get_artist_discography(artist_id):
             except Exception as e:
                 print(f"Hydrabase discography failed: {e}")
 
-        # Try to get albums from the appropriate source
-        # Check if the ID looks like Spotify (alphanumeric) or iTunes (numeric only)
-        is_numeric_id = artist_id.isdigit()
-
-        if not albums and spotify_available and not is_numeric_id:
-            # Try Spotify first for alphanumeric IDs
-            try:
-                albums = spotify_client.get_artist_albums(artist_id, album_type='album,single')
-                if albums:
-                    active_source = 'spotify'
-                    print(f"📊 Got {len(albums)} albums from Spotify")
-            except Exception as e:
-                print(f"Spotify lookup failed: {e}")
-
-        # Try fallback source if Spotify didn't work or if it's a numeric ID
         if not albums:
             try:
-                if is_numeric_id:
-                    # It's a numeric ID (iTunes/Deezer), use directly
-                    albums = fallback_client.get_artist_albums(artist_id, album_type='album,single', limit=50)
-                    if albums:
-                        active_source = fallback_source
-                        print(f"📊 Got {len(albums)} albums from {fallback_source} (direct ID)")
-                elif artist_name:
-                    # Search fallback by name
-                    print(f"🔄 Trying {fallback_source} search by name: '{artist_name}'")
-                    fallback_artists = fallback_client.search_artists(artist_name, limit=5)
-                    if fallback_artists:
-                        # Find best match
-                        best_match = None
-                        for artist in fallback_artists:
-                            if artist.name.lower() == artist_name.lower():
-                                best_match = artist
-                                break
-                        if not best_match:
-                            best_match = fallback_artists[0]
-
-                        print(f"✅ Found {fallback_source} artist: {best_match.name} (ID: {best_match.id})")
-                        albums = fallback_client.get_artist_albums(best_match.id, album_type='album,single', limit=50)
-                        if albums:
-                            active_source = fallback_source
-                            print(f"📊 Got {len(albums)} albums from {fallback_source} (name search)")
+                primary_client, primary_source = _get_primary_metadata_client()
+                albums, resolved_artist_id = _fetch_artist_albums_for_source(
+                    primary_client,
+                    primary_source,
+                    artist_id=artist_id,
+                    artist_name=artist_name,
+                    album_type='album,single',
+                    limit=50,
+                    feature='web.artist_discography',
+                )
+                if albums:
+                    active_source = primary_source
+                    print(f"📊 Got {len(albums)} albums from {primary_source} (resolved artist ID: {resolved_artist_id})")
             except Exception as e:
-                print(f"{fallback_source} lookup failed: {e}")
+                print(f"Primary metadata lookup failed: {e}")
 
         print(f"📊 Total albums returned: {len(albums)} (source: {active_source})")
         
@@ -14895,8 +14840,14 @@ def _generate_album_suggestions(selected_artist, search_result):
         clean_target = re.sub(r'^\(\d{4}\)\s*', '', target_album_name).strip()
         print(f"    target_album: '{clean_target}'")
         
-        # Get artist's albums from Spotify
-        artist_albums = spotify_client.get_artist_albums(selected_artist['id'])
+        primary_client, primary_source = _get_primary_metadata_client()
+        artist_albums, _ = _fetch_artist_albums_for_source(
+            primary_client,
+            primary_source,
+            artist_id=selected_artist.get('id', ''),
+            artist_name=selected_artist.get('name', ''),
+            feature='web.match.album_suggestions',
+        )
         print(f"📊 Found {len(artist_albums)} albums for artist")
         
         album_matches = []
@@ -14974,8 +14925,9 @@ def search_match():
                 artist_matches = hydrabase_client.search_artists(query, limit=8)
                 provider = 'hydrabase'
             else:
-                artist_matches = spotify_client.search_artists(query, limit=8)
-                provider = _detect_provider(artist_matches, spotify_client)
+                primary_client, primary_source = _get_primary_metadata_client()
+                artist_matches = primary_client.search_artists(query, limit=8)
+                provider = primary_source
             results = []
 
             for artist in artist_matches:
@@ -15010,9 +14962,22 @@ def search_match():
             else:
                 if not artist_id:
                     return jsonify({"error": "Artist ID required for album search"}), 400
-                # Get artist's albums and filter by query
-                album_matches = spotify_client.get_artist_albums(artist_id)
-                provider = _detect_provider(album_matches, spotify_client)
+                artist_name = data.get('artist_name', '')
+                if not artist_name and artist_id and spotify_client and not str(artist_id).isdigit():
+                    try:
+                        artist_info = spotify_client.get_artist(artist_id)
+                        artist_name = (artist_info or {}).get('name', '') if isinstance(artist_info, dict) else ''
+                    except Exception:
+                        artist_name = ''
+                primary_client, primary_source = _get_primary_metadata_client()
+                album_matches, _ = _fetch_artist_albums_for_source(
+                    primary_client,
+                    primary_source,
+                    artist_id=artist_id,
+                    artist_name=artist_name,
+                    feature='web.match.album_search',
+                )
+                provider = primary_source
 
             results = []
             for album in album_matches:
@@ -33296,6 +33261,73 @@ def _get_metadata_fallback_client():
     from core.itunes_client import iTunesClient
     return iTunesClient()
 
+
+def _infer_metadata_client_source(client):
+    """Infer provider name from a metadata client instance."""
+    if client is spotify_client:
+        return 'spotify'
+    class_name = client.__class__.__name__.lower()
+    if 'deezer' in class_name:
+        return 'deezer'
+    if 'discogs' in class_name:
+        return 'discogs'
+    if 'hydra' in class_name:
+        return 'hydrabase'
+    return 'itunes'
+
+
+def _get_primary_metadata_client():
+    """Get the configured primary metadata client for general metadata browsing."""
+    from core.metadata_service import get_primary_metadata_client
+    return get_primary_metadata_client(spotify_client)
+
+
+def _resolve_artist_for_source(client, source_name, artist_id='', artist_name=''):
+    """Resolve an artist ID for the requested provider, searching by name when needed."""
+    artist_id = str(artist_id or '').strip()
+    artist_name = (artist_name or '').strip()
+
+    if source_name == 'spotify':
+        if artist_id and not artist_id.isdigit():
+            return artist_id
+    elif source_name in ('itunes', 'deezer'):
+        if artist_id.isdigit():
+            return artist_id
+    else:
+        if artist_id:
+            return artist_id
+
+    if not artist_name:
+        return None
+
+    search_artists = client.search_artists(artist_name, limit=5)
+    if not search_artists:
+        return None
+    best = next((a for a in search_artists if a.name.lower().strip() == artist_name.lower()), search_artists[0])
+    return best.id
+
+
+def _fetch_artist_albums_for_source(client, source_name, artist_id='', artist_name='', album_type='album,single', limit=50, feature='web.artist_albums', fetch_mode='active_provider', skip_cache=False):
+    """Fetch artist albums for a specific provider using ID or name resolution."""
+    from core.metadata_service import log_artist_album_fetch
+
+    resolved_artist_id = _resolve_artist_for_source(client, source_name, artist_id=artist_id, artist_name=artist_name)
+    if not resolved_artist_id:
+        return [], None
+
+    log_artist_album_fetch(
+        logger,
+        feature=feature,
+        provider=source_name,
+        artist_id=resolved_artist_id,
+        fetch_mode=fetch_mode,
+        skip_cache=skip_cache,
+        artist_name=artist_name,
+    )
+    kwargs = {'skip_cache': True} if skip_cache and source_name == 'spotify' else {}
+    albums = client.get_artist_albums(resolved_artist_id, album_type=album_type, limit=limit, **kwargs)
+    return albums or [], resolved_artist_id
+
 @app.route('/api/deezer/arl-status', methods=['GET'])
 def get_deezer_arl_status():
     """Check if Deezer ARL is configured and authenticated."""
@@ -38409,7 +38441,7 @@ def start_watchlist_scan():
     try:
         # Check if MetadataService can provide a working client (Spotify OR fallback)
         from core.metadata_service import MetadataService
-        metadata_service = MetadataService()
+        metadata_service = MetadataService(preferred_provider="primary")
 
         # Get active provider - will be spotify or the configured fallback
         active_provider = metadata_service.get_active_provider()
@@ -43141,32 +43173,18 @@ def search_artists_for_playlist():
             if hydrabase_worker and dev_mode_enabled:
                 hydrabase_worker.enqueue(query, 'artists')
 
-            # Try Spotify first, fall back to iTunes
-            if spotify_client.sp and not _spotify_rate_limited():
-                try:
-                    artist_results = spotify_client.search_artists(query, limit=10)
-                    for artist in artist_results:
-                        artists.append({
-                            'id': artist.id,
-                            'name': artist.name,
-                            'image_url': artist.image_url
-                        })
-                except Exception as e:
-                    logger.warning(f"Spotify artist search failed, falling back to iTunes: {e}")
-
-            if not artists:
-                fallback = _get_metadata_fallback_client()
-                artist_objs = fallback.search_artists(query, limit=10)
-                for artist in artist_objs:
-                    # Fallback artist search may not return images — grab from album art
-                    image = artist.image_url
-                    if not image:
-                        image = fallback._get_artist_image_from_albums(artist.id)
-                    artists.append({
-                        'id': artist.id,
-                        'name': artist.name,
-                        'image_url': image
-                    })
+            primary_client, primary_source = _get_primary_metadata_client()
+            artist_results = primary_client.search_artists(query, limit=10)
+            for artist in artist_results:
+                image = artist.image_url
+                if not image and hasattr(primary_client, '_get_artist_image_from_albums'):
+                    image = primary_client._get_artist_image_from_albums(artist.id)
+                artists.append({
+                    'id': artist.id,
+                    'name': artist.name,
+                    'image_url': image,
+                    'source': primary_source,
+                })
 
             if artists:
                 # Re-rank: boost exact name matches to the top
@@ -47237,13 +47255,7 @@ def playlist_explorer_build_tree():
             return jsonify({"success": False, "error": "Playlist has no tracks"}), 400
 
         # Determine active metadata source
-        spotify_available = spotify_client and spotify_client.is_spotify_authenticated()
-        if spotify_available:
-            active_client = spotify_client
-            source_name = 'spotify'
-        else:
-            active_client = _get_metadata_fallback_client()
-            source_name = _get_metadata_fallback_source()
+        active_client, source_name = _get_primary_metadata_client()
 
         cache = get_metadata_cache()
 
@@ -47356,8 +47368,18 @@ def playlist_explorer_build_tree():
 
             # Fetch albums
             try:
+                from core.metadata_service import log_artist_album_fetch
                 # skip_cache only supported by spotify_client — other clients don't cache this call
                 _skip = {'skip_cache': True} if hasattr(active_client, 'sp') else {}
+                log_artist_album_fetch(
+                    logger,
+                    feature='web.playlist_explorer',
+                    provider=source_name,
+                    artist_id=artist_id,
+                    fetch_mode='active_provider',
+                    skip_cache=bool(_skip),
+                    artist_name=artist_name,
+                )
                 all_albums = active_client.get_artist_albums(artist_id, album_type='album,single', limit=50, **_skip)
             except Exception as e:
                 return {'success': False, 'error': f'Album fetch failed: {e}'}
@@ -48494,10 +48516,11 @@ def start_oauth_callback_servers():
 # ===============================================
 
 def get_spotify_artist_discography(artist_name):
-    """Get complete artist discography from Spotify using proper matching"""
+    """Spotify-only artist enrichment helper used by explicitly Spotify-driven detail flows."""
     try:
         from core.spotify_client import SpotifyClient
         from core.matching_engine import MusicMatchingEngine
+        from core.metadata_service import log_artist_album_fetch
 
         print(f"🎵 Searching Spotify for artist: {artist_name}")
 
@@ -48553,6 +48576,14 @@ def get_spotify_artist_discography(artist_name):
         print(f"🎵 Found Spotify artist: {artist.name} (ID: {spotify_artist_id}, confidence: {highest_score:.3f})")
 
         # Get all albums (albums, singles, and compilations)
+        log_artist_album_fetch(
+            logger,
+            feature="web.get_spotify_artist_discography",
+            provider="spotify",
+            artist_id=spotify_artist_id,
+            fetch_mode="spotify_only",
+            artist_name=artist_name,
+        )
         all_albums = spotify_client.get_artist_albums(spotify_artist_id, album_type='album,single,compilation', limit=50)
 
         if not all_albums:

@@ -103,14 +103,11 @@ class PersonalizedPlaylistsService:
     def _get_active_source(self) -> str:
         """
         Determine which music source is active for discovery.
-        Returns 'spotify' if Spotify is authenticated, otherwise the configured fallback ('itunes' or 'deezer').
+        Returns the configured primary metadata provider for general discovery flows.
         """
-        if self.spotify_client and hasattr(self.spotify_client, 'is_spotify_authenticated'):
-            if self.spotify_client.is_spotify_authenticated():
-                return 'spotify'
         try:
-            from config.settings import config_manager
-            return config_manager.get('metadata.fallback_source', 'itunes') or 'itunes'
+            from core.metadata_service import get_primary_metadata_source
+            return get_primary_metadata_source(self.spotify_client)
         except Exception:
             return 'itunes'
 
@@ -882,13 +879,20 @@ class PersonalizedPlaylistsService:
                 logger.error(f"Invalid seed artists count: {len(seed_artist_ids)}")
                 return {'tracks': [], 'error': 'Must provide 1-5 seed artists'}
 
-            use_spotify = self.spotify_client and self.spotify_client.sp
-            active_source = 'spotify' if use_spotify else self._get_active_source()
+            from core.metadata_service import get_primary_metadata_client, log_artist_album_fetch
+
+            active_client, active_source = get_primary_metadata_client(self.spotify_client)
+            use_spotify = active_source == 'spotify'
             logger.info(f"Building custom playlist from {len(seed_artist_ids)} seed artists (source: {active_source})")
 
             # Step 1: Get similar artists for each seed
             all_similar_artists = []
             seen_artist_ids = set(seed_artist_ids)
+            similar_id_column = {
+                'spotify': 'similar_artist_spotify_id',
+                'deezer': 'similar_artist_deezer_id',
+                'itunes': 'similar_artist_itunes_id',
+            }.get(active_source, 'similar_artist_itunes_id')
 
             for seed_artist_id in seed_artist_ids:
                 try:
@@ -897,17 +901,31 @@ class PersonalizedPlaylistsService:
                     with self.database._get_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute("""
-                            SELECT similar_artist_spotify_id, similar_artist_name
+                            SELECT DISTINCT
+                                sa.{similar_id_column} AS similar_artist_id,
+                                sa.similar_artist_name
                             FROM similar_artists
-                            WHERE source_artist_id = ?
-                            ORDER BY similarity_rank ASC
+                            LEFT JOIN watchlist_artists wa
+                                ON sa.source_artist_id = COALESCE(wa.spotify_artist_id, wa.itunes_artist_id, CAST(wa.id AS TEXT))
+                            WHERE sa.source_artist_id = ?
+                               OR wa.spotify_artist_id = ?
+                               OR wa.itunes_artist_id = ?
+                               OR wa.deezer_artist_id = ?
+                               OR CAST(wa.id AS TEXT) = ?
+                            ORDER BY sa.similarity_rank ASC
                             LIMIT 10
-                        """, (seed_artist_id,))
+                        """.format(similar_id_column=similar_id_column), (
+                            seed_artist_id,
+                            seed_artist_id,
+                            seed_artist_id,
+                            seed_artist_id,
+                            seed_artist_id,
+                        ))
                         db_results = cursor.fetchall()
 
                     if db_results:
                         for row in db_results:
-                            artist_id = row['similar_artist_spotify_id']
+                            artist_id = row['similar_artist_id']
                             artist_name = row['similar_artist_name']
                             if artist_id and artist_id not in seen_artist_ids:
                                 all_similar_artists.append({'id': artist_id, 'name': artist_name})
@@ -915,7 +933,8 @@ class PersonalizedPlaylistsService:
                                 if len(all_similar_artists) >= 25:
                                     break
                     elif use_spotify:
-                        # Fallback: fetch related artists from Spotify API
+                        # Spotify-only enrichment fallback: only used when Spotify is the
+                        # active provider and we do not have cached similar-artist data yet.
                         logger.info(f"No cached similar artists for {seed_artist_id}, trying Spotify related artists API")
                         try:
                             related = self.spotify_client.sp.artist_related_artists(seed_artist_id)
@@ -950,7 +969,14 @@ class PersonalizedPlaylistsService:
             if use_spotify:
                 for artist in artists_for_albums:
                     try:
-                        albums = self.spotify_client.get_artist_albums(
+                        log_artist_album_fetch(
+                            logger,
+                            feature="personalized_playlists.build_custom_playlist",
+                            provider=active_source,
+                            artist_id=artist['id'],
+                            artist_name=artist.get('name'),
+                        )
+                        albums = active_client.get_artist_albums(
                             artist['id'],
                             album_type='album,single',
                             limit=10
@@ -963,11 +989,16 @@ class PersonalizedPlaylistsService:
                         logger.warning(f"Error getting albums for {artist.get('name', artist['id'])}: {e}")
                         continue
             else:
-                from core.metadata_service import _create_fallback_client
-                itunes = _create_fallback_client()
                 for artist in artists_for_albums:
                     try:
-                        albums = itunes.get_artist_albums(artist['id'], limit=10)
+                        log_artist_album_fetch(
+                            logger,
+                            feature="personalized_playlists.build_custom_playlist",
+                            provider=active_source,
+                            artist_id=artist['id'],
+                            artist_name=artist.get('name'),
+                        )
+                        albums = active_client.get_artist_albums(artist['id'], limit=10)
                         if albums:
                             all_albums.extend(albums)
                         import time
@@ -992,7 +1023,7 @@ class PersonalizedPlaylistsService:
             if use_spotify:
                 for album in selected_albums:
                     try:
-                        album_data = self.spotify_client.get_album(album.id)
+                        album_data = active_client.get_album(album.id)
                         if album_data and 'tracks' in album_data:
                             tracks = album_data['tracks'].get('items', [])
                             for track in tracks:
@@ -1019,11 +1050,9 @@ class PersonalizedPlaylistsService:
                         logger.warning(f"Error getting tracks from album: {e}")
                         continue
             else:
-                from core.metadata_service import _create_fallback_client
-                itunes = _create_fallback_client()
                 for album in selected_albums:
                     try:
-                        album_data = itunes.get_album(album.id, include_tracks=True)
+                        album_data = active_client.get_album(album.id, include_tracks=True)
                         if album_data and 'tracks' in album_data:
                             tracks = album_data['tracks'].get('items', [])
                             album_name = album_data.get('name', 'Unknown')
