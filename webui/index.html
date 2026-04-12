@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='setup-wizard.css') }}">
 </head>
 
-<body>
+<body class="nav-booting">
     <!-- Setup Wizard Overlay -->
     <div id="setup-wizard-overlay" class="setup-wizard-overlay" style="display: none;">
         <div class="setup-wizard-container">
@@ -188,7 +188,7 @@
 
             <!-- Navigation Section -->
             <nav class="sidebar-nav">
-                <button class="nav-button active" data-page="dashboard">
+                <button class="nav-button" data-page="dashboard">
                     <span class="nav-icon"><svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="4" rx="1"/><rect x="3" y="14" width="7" height="4" rx="1"/><rect x="14" y="11" width="7" height="7" rx="1"/><line x1="5" y1="20" x2="5" y2="22"/><line x1="8" y1="19" x2="8" y2="22"/></svg></span>
                     <span class="nav-text">Dashboard</span>
                 </button>

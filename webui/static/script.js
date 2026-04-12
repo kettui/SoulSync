@@ -74,6 +74,7 @@ let artistsPageState = {
     searchQuery: '',
     searchResults: [],
     selectedArtist: null,
+    detailReturnView: null,
     sourceOverride: null, // Set when navigating from an alternate search tab
     artistDiscography: {
         albums: [],
@@ -2664,6 +2665,7 @@ async function _continueAppInit() {
 
 function initApp() {
     // Initialize components
+    initializeNavigationRouting();
     initializeNavigation();
     initializeMobileNavigation();
     initializeMediaPlayer();
@@ -2841,16 +2843,251 @@ function initializeDownloadManagerToggle() {
     console.log('Download manager toggle initialized');
 }
 
-function navigateToPage(pageId) {
-    if (pageId === currentPage) return;
+let navigationRoutingInitialized = false;
+let navigationBootReady = false;
+let bootNavigationPage = null;
+
+function markNavigationBootReady() {
+    if (navigationBootReady) return;
+    navigationBootReady = true;
+    if (!document.body) return;
+    document.body.classList.remove('nav-booting');
+    document.body.classList.add('nav-ready');
+    bootNavigationPage = null;
+}
+
+function setActiveNavigationButton(pageId) {
+    const navPageId = pageId === 'artist-detail' ? 'library' : pageId;
+    document.querySelectorAll('.nav-button').forEach(btn => btn.classList.remove('active'));
+    const navButton = document.querySelector(`[data-page="${navPageId}"]`);
+    if (navButton) {
+        navButton.classList.add('active');
+    }
+}
+
+function primeNavigationSelectionFromUrl(route = getNavigationRouteFromUrl()) {
+    const fallbackPage = getProfileHomePage();
+    let targetPage = route.page || fallbackPage;
+
+    if (!isPageAllowed(targetPage)) {
+        targetPage = fallbackPage;
+    }
+
+    bootNavigationPage = targetPage;
+    setActiveNavigationButton(bootNavigationPage);
+}
+
+function initializeNavigationRouting() {
+    if (navigationRoutingInitialized) return;
+    navigationRoutingInitialized = true;
+
+    window.addEventListener('popstate', () => {
+        restoreNavigationFromUrl();
+    });
+}
+
+function getNavigationRouteFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    return {
+        page: params.get('page'),
+        artistId: params.get('artist_id'),
+        artistName: params.get('artist_name')
+    };
+}
+
+function buildNavigationUrl(pageId, artistId = null, artistName = null) {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+
+    params.set('page', pageId);
+    params.delete('setup');
+
+    if ((pageId === 'artist-detail' || pageId === 'artists') && artistId) {
+        params.set('artist_id', artistId);
+        if (artistName) {
+            params.set('artist_name', artistName);
+        } else {
+            params.delete('artist_name');
+        }
+    } else {
+        params.delete('artist_id');
+        params.delete('artist_name');
+    }
+
+    return url;
+}
+
+function syncNavigationUrl(pageId, options = {}) {
+    const replace = options.replace === true;
+    const artistId = options.artistId || null;
+    const artistName = options.artistName || null;
+    const state = { page: pageId };
+
+    if ((pageId === 'artist-detail' || pageId === 'artists') && artistId) {
+        state.artistId = artistId;
+        state.artistName = artistName;
+    }
+
+    window.history[replace ? 'replaceState' : 'pushState'](state, '', buildNavigationUrl(pageId, artistId, artistName).toString());
+}
+
+function clearArtistDetailRouteState() {
+    if (artistDetailPageState.completionController) {
+        artistDetailPageState.completionController.abort();
+        artistDetailPageState.completionController = null;
+    }
+
+    artistDetailPageState.currentArtistId = null;
+    artistDetailPageState.currentArtistName = null;
+    artistDetailPageState.enhancedData = null;
+    artistDetailPageState.currentDiscography = null;
+    artistDetailPageState.expandedAlbums = new Set();
+    artistDetailPageState.selectedTracks = new Set();
+    artistDetailPageState.enhancedTrackSort = {};
+    artistDetailPageState.enhancedView = false;
+    artistDetailPageState.editingCell = null;
+}
+
+function clearArtistsPageDetailState() {
+    if (artistCompletionController) {
+        artistCompletionController.abort();
+        artistCompletionController = null;
+    }
+
+    if (similarArtistsController) {
+        similarArtistsController.abort();
+        similarArtistsController = null;
+    }
+
+    if (artistsPageState.selectedArtist) {
+        const artistId = artistsPageState.selectedArtist.id;
+        console.log(`🗑️ Clearing cached data for artist: ${artistsPageState.selectedArtist.name}`);
+
+        delete artistsPageState.cache.completionData[artistId];
+        delete artistsPageState.cache.discography[artistId];
+    }
+
+    artistsPageState.selectedArtist = null;
+    artistsPageState.artistDiscography = { albums: [], singles: [] };
+}
+
+function getArtistsPageReturnView() {
+    if (artistsPageState.detailReturnView === 'results' && artistsPageState.searchResults && artistsPageState.searchResults.length > 0) {
+        return 'results';
+    }
+
+    return 'search';
+}
+
+function restoreNavigationFromUrl(route = getNavigationRouteFromUrl()) {
+    const fallbackPage = getProfileHomePage();
+    const targetPage = route.page || fallbackPage;
+
+    if (!isPageAllowed(targetPage)) {
+        if (fallbackPage && fallbackPage !== targetPage) {
+            restoreNavigationFromUrl({ page: fallbackPage });
+        }
+        return;
+    }
+
+    if (targetPage === 'artists' && route.artistId) {
+        navigateToPage('artists', {
+            updateHistory: false,
+            replaceHistory: true,
+            force: true
+        });
+
+        if (!artistsPageState.isInitialized) {
+            initializeArtistsPage();
+        }
+
+        selectArtistForDetail({
+            id: route.artistId,
+            name: route.artistName || '',
+            image_url: ''
+        }, {
+            updateHistory: false
+        });
+
+        syncNavigationUrl('artists', {
+            replace: true,
+            artistId: route.artistId,
+            artistName: route.artistName || ''
+        });
+        return;
+    }
+
+    if (targetPage === 'artists' && !route.artistId) {
+        if (artistsPageState.currentView === 'detail') {
+            if (getArtistsPageReturnView() === 'results') {
+                showArtistsResultsState();
+            } else {
+                showArtistsSearchState();
+            }
+            return;
+        }
+    }
+
+    if (targetPage === 'artist-detail') {
+        if (route.artistId) {
+            navigateToArtistDetail(route.artistId, route.artistName || '', {
+                updateHistory: false,
+                force: true
+            });
+            syncNavigationUrl('artist-detail', {
+                replace: true,
+                artistId: route.artistId,
+                artistName: route.artistName || ''
+            });
+            return;
+        }
+
+        if (fallbackPage && fallbackPage !== 'artist-detail') {
+            restoreNavigationFromUrl({ page: fallbackPage });
+        }
+        return;
+    }
+
+    navigateToPage(targetPage, {
+        updateHistory: false,
+        replaceHistory: true,
+        force: true
+    });
+    syncNavigationUrl(targetPage, { replace: true });
+}
+
+function getRouteSignature(pageId, artistId = null) {
+    return pageId === 'artist-detail' ? `artist-detail:${artistId || ''}` : pageId;
+}
+
+function navigateToPage(pageId, options = {}) {
+    const updateHistory = options.updateHistory !== false;
+    const replaceHistory = options.replaceHistory === true;
+    const force = options.force === true;
+    const nextArtistId = pageId === 'artist-detail'
+        ? (options.artistId || artistDetailPageState.currentArtistId || null)
+        : null;
+    const currentSignature = getRouteSignature(currentPage, artistDetailPageState.currentArtistId);
+    const nextSignature = getRouteSignature(pageId, nextArtistId);
+
+    if (!force && nextSignature === currentSignature) return;
 
     // Permission guard — redirect to home page if not allowed
     if (!isPageAllowed(pageId)) {
         const home = getProfileHomePage();
         if (home !== currentPage && isPageAllowed(home)) {
-            navigateToPage(home);
+            navigateToPage(home, { updateHistory, replaceHistory, force: true });
         }
         return;
+    }
+
+    if (currentPage === 'artist-detail' && pageId !== 'artist-detail') {
+        clearArtistDetailRouteState();
+    }
+
+    if (currentPage === 'artists' && pageId !== 'artists' && artistsPageState.currentView === 'detail') {
+        clearArtistsPageDetailState();
+        artistsPageState.currentView = 'search';
     }
 
     // Update navigation buttons (only if there's a nav button for this page)
@@ -2859,11 +3096,7 @@ function navigateToPage(pageId) {
     });
 
     // Handle artist-detail page specially - it should highlight the 'library' nav button
-    const navPageId = pageId === 'artist-detail' ? 'library' : pageId;
-    const navButton = document.querySelector(`[data-page="${navPageId}"]`);
-    if (navButton) {
-        navButton.classList.add('active');
-    }
+    setActiveNavigationButton(pageId);
 
     // Update pages
     document.querySelectorAll('.page').forEach(page => {
@@ -2902,6 +3135,14 @@ function navigateToPage(pageId) {
 
     // Update worker orbs
     if (window.workerOrbs) window.workerOrbs.setPage(pageId);
+
+    if (updateHistory) {
+        syncNavigationUrl(pageId, {
+            replace: replaceHistory,
+            artistId: nextArtistId,
+            artistName: pageId === 'artist-detail' ? (options.artistName || artistDetailPageState.currentArtistName || '') : null
+        });
+    }
 }
 
 // REPLACE your old loadPageData function with this one:
@@ -2942,20 +3183,10 @@ async function loadPageData(pageId) {
                 loadActiveDownloadsPage();
                 break;
             case 'library':
-                // Check if we should return to artist detail view instead of list
-                if (artistDetailPageState.currentArtistId && artistDetailPageState.currentArtistName) {
-                    navigateToPage('artist-detail');
-                    if (!artistDetailPageState.isInitialized) {
-                        initializeArtistDetailPage();
-                        loadArtistDetailData(artistDetailPageState.currentArtistId, artistDetailPageState.currentArtistName);
-                    }
-                    // Already initialized — DOM content persists, no reload needed
-                } else {
-                    if (!libraryPageState.isInitialized) {
-                        initializeLibraryPage();
-                    }
-                    // Already initialized — DOM content persists, no reload needed
+                if (!libraryPageState.isInitialized) {
+                    initializeLibraryPage();
                 }
+                // Already initialized — DOM content persists, no reload needed
                 break;
             case 'artist-detail':
                 // Artist detail page is handled separately by navigateToArtistDetail()
@@ -9792,6 +10023,12 @@ async function startDownload(index) {
 
 async function loadInitialData() {
     try {
+        const route = getNavigationRouteFromUrl();
+
+        // Prime the sidebar selection immediately so the boot reveal never
+        // shows the dashboard as the temporary default.
+        primeNavigationSelectionFromUrl(route);
+
         // Load artist bubble state first
         await hydrateArtistBubblesFromSnapshot();
 
@@ -9804,16 +10041,25 @@ async function loadInitialData() {
         // Load Beatport bubble state
         await hydrateBeatportBubblesFromSnapshot();
 
-        // Navigate to user's home page (or dashboard for admin)
-        const homePage = getProfileHomePage();
-        if (homePage !== 'dashboard') {
-            navigateToPage(homePage);
+        // Restore URL route first so refresh/back/forward lands where user was
+        if (route.page) {
+            restoreNavigationFromUrl(route);
         } else {
-            await loadDashboardData();
-            loadDashboardSyncHistory();
+            // Navigate to user's home page (or dashboard for admin)
+            const homePage = getProfileHomePage();
+            if (homePage !== 'dashboard') {
+                navigateToPage(homePage, { updateHistory: false, force: true });
+            } else {
+                await loadDashboardData();
+                loadDashboardSyncHistory();
+            }
+
+            syncNavigationUrl(homePage, { replace: true });
         }
     } catch (error) {
         console.error('Error loading initial data:', error);
+    } finally {
+        markNavigationBootReady();
     }
 }
 
@@ -34924,6 +35170,9 @@ async function selectArtistForDetail(artist, options = {}) {
     }
 
     // Update state
+    if (artistsPageState.currentView !== 'detail') {
+        artistsPageState.detailReturnView = artistsPageState.currentView;
+    }
     artistsPageState.selectedArtist = artist;
     artistsPageState.currentView = 'detail';
     artistsPageState.sourceOverride = options.source || null;
@@ -34934,6 +35183,14 @@ async function selectArtistForDetail(artist, options = {}) {
 
     // Update artist info in header
     updateArtistDetailHeader(artist);
+
+    if (options.updateHistory !== false) {
+        syncNavigationUrl('artists', {
+            replace: options.replaceHistory === true,
+            artistId: artist.id,
+            artistName: artist.name
+        });
+    }
 
     // Load discography (pass artist name for cross-source fallback)
     await loadArtistDiscography(artist.id, artist.name, options.source, options.plugin);
@@ -35855,19 +36112,7 @@ function initializeArtistTabs() {
 function showArtistsSearchState() {
     console.log('🔄 Showing search state');
 
-    // Cancel any ongoing completion check when navigating back to search
-    if (artistCompletionController) {
-        console.log('⏹️ Canceling completion check (navigating back to search)');
-        artistCompletionController.abort();
-        artistCompletionController = null;
-    }
-
-    // Cancel any ongoing similar artists stream when navigating back to search
-    if (similarArtistsController) {
-        console.log('⏹️ Canceling similar artists stream (navigating back to search)');
-        similarArtistsController.abort();
-        similarArtistsController = null;
-    }
+    clearArtistsPageDetailState();
 
     const searchState = document.getElementById('artists-search-state');
     const resultsState = document.getElementById('artists-results-state');
@@ -35886,7 +36131,12 @@ function showArtistsSearchState() {
     }
 
     artistsPageState.currentView = 'search';
+    artistsPageState.detailReturnView = null;
     updateArtistsSearchStatus('default');
+
+    if (currentPage === 'artists') {
+        syncNavigationUrl('artists', { replace: true });
+    }
 
     // Show artist downloads section if there are active downloads
     showArtistDownloadsSection();
@@ -35895,34 +36145,7 @@ function showArtistsSearchState() {
 function showArtistsResultsState() {
     console.log('🔄 Showing results state');
 
-    // Cancel any ongoing completion check when navigating back
-    if (artistCompletionController) {
-        console.log('⏹️ Canceling completion check (navigating back to results)');
-        artistCompletionController.abort();
-        artistCompletionController = null;
-    }
-
-    // Cancel any ongoing similar artists stream when navigating back
-    if (similarArtistsController) {
-        console.log('⏹️ Canceling similar artists stream (navigating back to results)');
-        similarArtistsController.abort();
-        similarArtistsController = null;
-    }
-
-    // Clear artist-specific data when navigating back to results
-    // This ensures that selecting the same artist again will trigger a fresh scan
-    if (artistsPageState.selectedArtist) {
-        const artistId = artistsPageState.selectedArtist.id;
-        console.log(`🗑️ Clearing cached data for artist: ${artistsPageState.selectedArtist.name}`);
-
-        // Clear artist-specific cache data
-        delete artistsPageState.cache.completionData[artistId];
-        delete artistsPageState.cache.discography[artistId];
-
-        // Clear artist state
-        artistsPageState.selectedArtist = null;
-        artistsPageState.artistDiscography = { albums: [], singles: [] };
-    }
+    clearArtistsPageDetailState();
 
     const searchState = document.getElementById('artists-search-state');
     const resultsState = document.getElementById('artists-results-state');
@@ -35942,6 +36165,11 @@ function showArtistsResultsState() {
     }
 
     artistsPageState.currentView = 'results';
+    artistsPageState.detailReturnView = null;
+
+    if (currentPage === 'artists') {
+        syncNavigationUrl('artists', { replace: true });
+    }
 }
 
 function showArtistDetailState() {
@@ -42713,7 +42941,7 @@ let discographyFilterState = {
     ownership: 'all'  // 'all', 'owned', 'missing'
 };
 
-function navigateToArtistDetail(artistId, artistName) {
+function navigateToArtistDetail(artistId, artistName, options = {}) {
     console.log(`🎵 Navigating to artist detail: ${artistName} (ID: ${artistId})`);
 
     // Abort any in-progress completion stream
@@ -42728,12 +42956,9 @@ function navigateToArtistDetail(artistId, artistName) {
     if (existingMatchOverlay) existingMatchOverlay.remove();
 
     // Store current artist info and reset enhanced view state
+    clearArtistDetailRouteState();
     artistDetailPageState.currentArtistId = artistId;
     artistDetailPageState.currentArtistName = artistName;
-    artistDetailPageState.enhancedData = null;
-    artistDetailPageState.expandedAlbums = new Set();
-    artistDetailPageState.selectedTracks = new Set();
-    artistDetailPageState.enhancedTrackSort = {};
     artistDetailPageState.enhancedView = false;
 
     // Reset enhanced view toggle to standard
@@ -42758,7 +42983,13 @@ function navigateToArtistDetail(artistId, artistName) {
     if (bulkBar) bulkBar.classList.remove('visible');
 
     // Navigate to artist detail page
-    navigateToPage('artist-detail');
+    navigateToPage('artist-detail', {
+        updateHistory: options.updateHistory !== false,
+        replaceHistory: options.replaceHistory === true,
+        force: true,
+        artistId,
+        artistName
+    });
 
     // Initialize if needed and load data
     if (!artistDetailPageState.isInitialized) {
@@ -42777,15 +43008,8 @@ function initializeArtistDetailPage() {
     if (backBtn) {
         backBtn.addEventListener("click", () => {
             console.log("🔙 Returning to Library page");
-            // Abort any in-progress completion stream
-            if (artistDetailPageState.completionController) {
-                artistDetailPageState.completionController.abort();
-                artistDetailPageState.completionController = null;
-            }
-            // Clear artist detail state so we go back to the list view
-            artistDetailPageState.currentArtistId = null;
-            artistDetailPageState.currentArtistName = null;
-            navigateToPage('library');
+            clearArtistDetailRouteState();
+            navigateToPage('library', { replaceHistory: true });
         });
     }
 
@@ -63928,7 +64152,7 @@ async function loadStatsData() {
             <span class="stats-ranked-num">${i + 1}</span>
             ${item.image_url ? `<img class="stats-ranked-img" src="${item.image_url}" alt="" onerror="this.style.display='none'">` : ''}
             <div class="stats-ranked-info">
-                <div class="stats-ranked-name">${item.id ? `<a class="stats-artist-link" onclick="navigateToPage('library');setTimeout(()=>navigateToArtistDetail('${item.id}','${_esc(item.name).replace(/'/g,"\\'")}'),300)">${_esc(item.name)}</a>` : _esc(item.name)}${item.soul_id && !item.soul_id.startsWith('soul_unnamed_') ? ' <img src="/static/trans2.png" style="width:12px;height:12px;vertical-align:middle;opacity:0.5;" title="SoulID">' : ''}</div>
+                <div class="stats-ranked-name">${item.id ? `<a class="stats-artist-link" onclick="setTimeout(()=>navigateToArtistDetail('${item.id}','${_esc(item.name).replace(/'/g,"\\'")}'),300)">${_esc(item.name)}</a>` : _esc(item.name)}${item.soul_id && !item.soul_id.startsWith('soul_unnamed_') ? ' <img src="/static/trans2.png" style="width:12px;height:12px;vertical-align:middle;opacity:0.5;" title="SoulID">' : ''}</div>
                 <div class="stats-ranked-meta">${item.global_listeners ? _fmt(item.global_listeners) + ' global listeners' : ''}</div>
             </div>
             <span class="stats-ranked-count">${_fmt(item.play_count)} plays</span>
@@ -63942,7 +64166,7 @@ async function loadStatsData() {
             ${item.image_url ? `<img class="stats-ranked-img" src="${item.image_url}" alt="" onerror="this.style.display='none'">` : ''}
             <div class="stats-ranked-info">
                 <div class="stats-ranked-name">${_esc(item.name)}</div>
-                <div class="stats-ranked-meta">${item.artist_id ? `<a class="stats-artist-link" onclick="navigateToPage('library');setTimeout(()=>navigateToArtistDetail('${item.artist_id}','${_esc(item.artist||'').replace(/'/g,"\\'")}'),300)">${_esc(item.artist || '')}</a>` : _esc(item.artist || '')}</div>
+                <div class="stats-ranked-meta">${item.artist_id ? `<a class="stats-artist-link" onclick="setTimeout(()=>navigateToArtistDetail('${item.artist_id}','${_esc(item.artist||'').replace(/'/g,"\\'")}'),300)">${_esc(item.artist || '')}</a>` : _esc(item.artist || '')}</div>
             </div>
             <span class="stats-ranked-count">${_fmt(item.play_count)} plays</span>
         </div>
@@ -63955,7 +64179,7 @@ async function loadStatsData() {
             ${item.image_url ? `<img class="stats-ranked-img" src="${item.image_url}" alt="" onerror="this.style.display='none'">` : ''}
             <div class="stats-ranked-info">
                 <div class="stats-ranked-name">${_esc(item.name)}</div>
-                <div class="stats-ranked-meta">${item.artist_id ? `<a class="stats-artist-link" onclick="navigateToPage('library');setTimeout(()=>navigateToArtistDetail('${item.artist_id}','${_esc(item.artist||'').replace(/'/g,"\\'")}'),300)">${_esc(item.artist || '')}</a>` : _esc(item.artist || '')}${item.album ? ' · ' + _esc(item.album) : ''}</div>
+                <div class="stats-ranked-meta">${item.artist_id ? `<a class="stats-artist-link" onclick="setTimeout(()=>navigateToArtistDetail('${item.artist_id}','${_esc(item.artist||'').replace(/'/g,"\\'")}'),300)">${_esc(item.artist || '')}</a>` : _esc(item.artist || '')}${item.album ? ' · ' + _esc(item.album) : ''}</div>
             </div>
             <button class="stats-play-btn" onclick="event.stopPropagation();playStatsTrack('${_esc(item.name).replace(/'/g,"\\'")}','${_esc(item.artist||'').replace(/'/g,"\\'")}','${_esc(item.album||'').replace(/'/g,"\\'")}')" title="Play">▶</button>
             <span class="stats-ranked-count">${_fmt(item.play_count)} plays</span>
@@ -63995,7 +64219,7 @@ function _renderTopArtistsVisual(artists) {
         ${top5.map((a, i) => {
             const pct = Math.round((a.play_count / maxPlays) * 100);
             const size = 44 + (4 - i) * 6; // Largest first: 68, 62, 56, 50, 44
-            return `<div class="stats-artist-bubble" onclick="${a.id ? `navigateToPage('library');setTimeout(()=>navigateToArtistDetail('${a.id}','${_esc(a.name).replace(/'/g,"\\\\'")}'),300)` : ''}" style="cursor:${a.id ? 'pointer' : 'default'}">
+            return `<div class="stats-artist-bubble" onclick="${a.id ? `setTimeout(()=>navigateToArtistDetail('${a.id}','${_esc(a.name).replace(/'/g,"\\\\'")}'),300)` : ''}" style="cursor:${a.id ? 'pointer' : 'default'}">
                 <div class="stats-bubble-img" style="width:${size}px;height:${size}px;${a.image_url ? `background-image:url('${a.image_url}')` : ''}">
                     ${!a.image_url ? `<span>${(a.name || '?')[0]}</span>` : ''}
                 </div>

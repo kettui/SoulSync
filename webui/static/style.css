@@ -36,6 +36,18 @@ body {
     width: 100vw;
 }
 
+body.nav-booting .main-container {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+body.nav-ready .main-container {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
 /* ======================================
    SIDEBAR STYLING - Premium Glassmorphic Design
    ====================================== */
