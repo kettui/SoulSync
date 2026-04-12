@@ -873,7 +873,12 @@ class WatchlistScanner:
                 error_message=str(e)
             )
     
-    def get_artist_discography(self, spotify_artist_id: str, last_scan_timestamp: Optional[datetime] = None) -> Optional[List]:
+    def get_artist_discography(
+        self,
+        spotify_artist_id: str,
+        last_scan_timestamp: Optional[datetime] = None,
+        lookback_days: Optional[int] = None,
+    ) -> Optional[List]:
         """
         Get artist's discography from Spotify, optionally filtered by release date.
 
@@ -881,6 +886,7 @@ class WatchlistScanner:
             spotify_artist_id: Spotify artist ID
             last_scan_timestamp: Only return releases after this date (for incremental scans)
                                 If None, uses lookback period setting from database
+            lookback_days: Optional per-artist override for first-scan lookback window
         """
         try:
             # Determine if we need the full discography or just recent releases.

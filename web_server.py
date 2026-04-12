@@ -362,6 +362,9 @@ try:
 except Exception as e:
     print(f"  Download orchestrator failed to initialize: {e}")
 
+# Keep the historical name used by some routes and background jobs.
+download_orchestrator = soulseek_client
+
 try:
     tidal_client = TidalClient()
     print("  Tidal client initialized")
@@ -4906,7 +4909,7 @@ def get_debug_info():
 
     # Library stats
     try:
-        db = get_db()
+        db = get_database()
         lib_stats = db.get_statistics()
         info['library'] = {
             'artists': lib_stats.get('artists', 0),
@@ -4918,14 +4921,14 @@ def get_debug_info():
 
     # Watchlist count
     try:
-        db = get_db()
+        db = get_database()
         info['watchlist_count'] = db.get_watchlist_count()
     except Exception:
         info['watchlist_count'] = 0
 
     # Automation count
     try:
-        db = get_db()
+        db = get_database()
         automations = db.get_automations()
         info['automations'] = {
             'total': len(automations),
@@ -22959,6 +22962,7 @@ def _process_wishlist_automatically(automation_id=None):
             # CLEANUP: Remove tracks from wishlist that already exist in library
             # This prevents wasting bandwidth on tracks we already have
             print("[Auto-Wishlist] Checking wishlist against library for already-owned tracks...")
+            active_server = config_manager.get_active_media_server()
             cleanup_tracks = []
             for p in all_profiles:
                 cleanup_tracks.extend(wishlist_service.get_wishlist_tracks_for_download(profile_id=p['id']))
@@ -22969,6 +22973,7 @@ def _process_wishlist_automatically(automation_id=None):
                 artists = track.get('artists', [])
                 spotify_track_id = track.get('spotify_track_id') or track.get('id')
                 track_album = track.get('album', {}).get('name') if isinstance(track.get('album'), dict) else track.get('album')
+                artist_name = track.get('artist_name', 'Unknown Artist')
 
                 if not track_name or not artists or not spotify_track_id:
                     continue
@@ -23851,6 +23856,7 @@ def start_wishlist_missing_downloads():
         # CLEANUP: Remove tracks from wishlist that already exist in library
         # This prevents wasting bandwidth on tracks we already have
         print("[Manual-Wishlist] Checking wishlist against library for already-owned tracks...")
+        active_server = config_manager.get_active_media_server()
         cleanup_tracks = wishlist_service.get_wishlist_tracks_for_download(profile_id=manual_profile_id)
         cleanup_removed = 0
 
@@ -23863,6 +23869,7 @@ def start_wishlist_missing_downloads():
             artists = track.get('artists', [])
             spotify_track_id = track.get('spotify_track_id') or track.get('id')
             track_album = track.get('album', {}).get('name') if isinstance(track.get('album'), dict) else track.get('album')
+            artist_name = track.get('artist_name', 'Unknown Artist')
 
             if not track_name or not artists or not spotify_track_id:
                 continue
@@ -26410,6 +26417,7 @@ def _process_failed_tracks_to_wishlist_exact(batch_id):
                 for i, failed_track_info in enumerate(permanently_failed_tracks[:max_failed_tracks]):
                     try:
                         track_name = failed_track_info.get('track_name', f'Track {i+1}')
+                        artist_name = failed_track_info.get('artist_name', 'Unknown Artist')
                         print(f"[Wishlist Processing] Adding track {i+1}/{max_failed_tracks}: {track_name}")
                         
                         success = wishlist_service.add_failed_track_from_modal(
@@ -26426,7 +26434,7 @@ def _process_failed_tracks_to_wishlist_exact(batch_id):
                                     automation_engine.emit('wishlist_item_added', {
                                         'artist': artist_name,
                                         'title': track_name,
-                                        'reason': track.get('failure_reason', ''),
+                                        'reason': failed_track_info.get('failure_reason', ''),
                                     })
                             except Exception:
                                 pass
@@ -32960,7 +32968,8 @@ def _run_playlist_discovery_worker(playlists, automation_id=None):
                     disc_number = None
                     if hasattr(best_match, 'id') and best_match.id:
                         try:
-                            _raw = cache.get_entity(discovery_source if not use_spotify else 'spotify', 'track', best_match.id)
+                            _cache = get_metadata_cache()
+                            _raw = _cache.get_entity(discovery_source if not use_spotify else 'spotify', 'track', best_match.id)
                             if _raw and isinstance(_raw.get('album'), dict):
                                 _raw_album = _raw['album']
                                 if _raw_album.get('id'):
