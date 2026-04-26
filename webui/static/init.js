@@ -2175,9 +2175,6 @@ function initApp() {
     // Start always-on download polling (batched, minimal overhead)
     startGlobalDownloadPolling();
 
-    // Load issues badge count
-    loadIssuesBadge();
-
     // Load initial data
     loadInitialData();
 
@@ -2490,9 +2487,6 @@ async function loadPageData(pageId) {
                 break;
             case 'automations':
                 await loadAutomations();
-                break;
-            case 'issues':
-                await loadIssuesPage();
                 break;
             case 'help':
                 initializeDocsPage();
