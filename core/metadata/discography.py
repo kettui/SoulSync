@@ -31,9 +31,13 @@ def _get_source_chain_for_lookup(options: MetadataLookupOptions) -> List[str]:
     primary_source = metadata_registry.get_primary_source()
     source_chain = list(metadata_registry.get_source_priority(primary_source))
     override = (options.source_override or '').strip().lower()
+    enabled_sources = tuple(source.strip().lower() for source in (options.enabled_sources or ()) if source and str(source).strip())
 
     if override:
         source_chain = [override] + [source for source in source_chain if source != override]
+
+    if enabled_sources:
+        source_chain = [source for source in source_chain if source in enabled_sources]
 
     if not options.allow_fallback:
         source_chain = source_chain[:1]
@@ -90,7 +94,7 @@ def _pick_best_artist_match(search_results: List[Any], artist_name: str) -> Opti
 
 
 def _build_discography_release_dict(release: Any, artist_id: str) -> Optional[Dict[str, Any]]:
-    release_id = _extract_lookup_value(release, 'id', 'album_id', 'release_id')
+    release_id = _extract_lookup_value(release, 'source_id', 'id', 'album_id', 'release_id')
     if not release_id:
         return None
 
@@ -98,6 +102,7 @@ def _build_discography_release_dict(release: Any, artist_id: str) -> Optional[Di
     release_date = _extract_lookup_value(release, 'release_date')
 
     return {
+        'source_id': release_id,
         'id': release_id,
         'name': _extract_lookup_value(release, 'name', 'title', default=release_id),
         'artist_name': _extract_release_artist_name(release),
@@ -312,7 +317,7 @@ def get_artist_discography(
         if not release_data:
             continue
 
-        release_id = release_data['id']
+        release_id = _extract_lookup_value(release_data, 'source_id', 'id')
         if release_id in seen_albums:
             continue
         seen_albums.add(release_id)
@@ -342,7 +347,7 @@ def get_artist_discography(
 
 
 def _build_artist_detail_release_card(release: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    release_id = _extract_lookup_value(release, 'id', 'album_id', 'release_id')
+    release_id = _extract_lookup_value(release, 'source_id', 'id', 'album_id', 'release_id')
     if not release_id:
         return None
 
@@ -360,6 +365,7 @@ def _build_artist_detail_release_card(release: Dict[str, Any]) -> Optional[Dict[
             release_year = str(release_year)
 
     card = {
+        'source_id': release_id,
         'id': release_id,
         'name': _extract_lookup_value(release, 'name', 'title', default=release_id),
         'title': _extract_lookup_value(release, 'name', 'title', default=release_id),
@@ -401,7 +407,7 @@ def get_artist_detail_discography(
         if not card:
             continue
 
-        release_id = card['id']
+        release_id = _extract_lookup_value(card, 'source_id', 'id')
         if release_id in seen_ids:
             continue
         seen_ids.add(release_id)
