@@ -188,7 +188,7 @@ def _build_single_import_context_payload(
         'album_id': album_id,
         'album_type': album_type,
         'release_date': release_date,
-        '_source': source or '',
+        'source': source or '',
     }
 
     album_payload = {
@@ -200,14 +200,14 @@ def _build_single_import_context_payload(
         'image_url': album_image_url,
         'images': album_images,
         'artists': album_artists,
-        '_source': source or '',
+        'source': source or '',
     }
 
     artist_payload = {
         'id': primary_artist_id,
         'name': primary_artist_name,
         'genres': [],
-        '_source': source or '',
+        'source': source or '',
     }
 
     original_search = {
@@ -222,7 +222,7 @@ def _build_single_import_context_payload(
         'artists': track_info['artists'],
         'duration_ms': track_info['duration_ms'],
         'id': track_id,
-        '_source': source or '',
+        'source': source or '',
     }
 
     return {
@@ -259,7 +259,7 @@ def _build_single_import_fallback_context(
                 'id': '',
                 'name': artist_name,
                 'genres': [],
-                '_source': '',
+                'source': '',
             },
             'album': {
                 'id': '',
@@ -270,7 +270,7 @@ def _build_single_import_fallback_context(
                 'image_url': '',
                 'images': [],
                 'artists': [],
-                '_source': '',
+                'source': '',
             },
             'track_info': {
                 'id': '',
@@ -284,7 +284,7 @@ def _build_single_import_fallback_context(
                 'album_id': '',
                 'album_type': 'album',
                 'release_date': '',
-                '_source': '',
+                'source': '',
             },
             'original_search_result': {
                 'title': title,
@@ -298,7 +298,7 @@ def _build_single_import_fallback_context(
                 'artists': [{'name': artist_name}],
                 'duration_ms': 0,
                 'id': '',
-                '_source': '',
+                'source': '',
             },
             'is_album_download': False,
             'has_clean_metadata': False,
